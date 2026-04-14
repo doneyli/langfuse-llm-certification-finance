@@ -119,30 +119,57 @@ def call_openai_compatible(question: str, model: str, endpoint: str, api_key: st
 
 # --------------- Task Function ---------------
 
+def _build_prompt(inp: dict) -> str:
+    """Build the full prompt from a dataset item's input.
+
+    If the input includes evidence (excerpts from financial filings),
+    include it as context so the model can answer from the source document
+    rather than guessing. This simulates a RAG pipeline.
+    """
+    question = inp.get("question", inp.get("text", ""))
+    evidence = inp.get("evidence", [])
+
+    if evidence and any(evidence):
+        context_parts = []
+        for i, ev in enumerate(evidence, 1):
+            if ev:
+                context_parts.append(f"--- Source Document Excerpt {i} ---\n{ev}")
+        context_block = "\n\n".join(context_parts)
+
+        return (
+            f"You are a financial analyst. Answer the question using ONLY the "
+            f"provided source document excerpts. Be precise with numbers.\n\n"
+            f"{context_block}\n\n"
+            f"--- Question ---\n{question}"
+        )
+
+    return question
+
+
 def create_certification_task(model: str, endpoint: str, api_key: str):
     """Create a task function that calls the model under test.
 
     The task function is called once per dataset item. It sends the input
-    to the model and returns the raw output text.
+    to the model and returns the raw output text. If the dataset item
+    includes evidence from financial filings, it's included as context.
     """
     def task(*, item, **kwargs):
         # Handle both DatasetItem (.input) and dict (["input"]) formats
         inp = item.input if hasattr(item, 'input') else item.get("input", {})
 
-        # Extract the question/text from the input
-        if isinstance(inp, dict):
-            question = inp.get("question", inp.get("text", ""))
-        else:
-            question = str(inp)
+        if isinstance(inp, str):
+            inp = {"text": inp}
 
-        if not question:
+        prompt = _build_prompt(inp)
+
+        if not prompt:
             return "Error: no question found in dataset item"
 
         # Route to appropriate LLM client
         if is_claude_native(model):
-            return call_anthropic_native(question, model)
+            return call_anthropic_native(prompt, model)
         else:
-            return call_openai_compatible(question, model, endpoint, api_key)
+            return call_openai_compatible(prompt, model, endpoint, api_key)
 
     return task
 
@@ -190,10 +217,10 @@ def select_evaluators(evaluator_mode: str, dataset_name: str, threshold: float):
 def main():
     args = parse_args()
 
-    # Load .env if available
+    # Load .env if available (override=True so .env takes precedence over shell env)
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(override=True)
     except ImportError:
         pass
 

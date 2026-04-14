@@ -67,12 +67,21 @@ def load_financebench_items(sample: bool):
 
     items = []
     for item in raw:
+        # Extract evidence text from the evidence field (list of dicts or strings)
+        evidence_texts = []
+        for ev in item.get("evidence", []):
+            if isinstance(ev, dict):
+                evidence_texts.append(ev.get("evidence_text", ""))
+            elif isinstance(ev, str):
+                evidence_texts.append(ev)
+
         items.append({
             "input": {
                 "question": item["question"],
                 "company": item.get("company", ""),
                 "doc_type": item.get("doc_type", ""),
                 "doc_link": item.get("doc_link", ""),
+                "evidence": evidence_texts,
             },
             "expected_output": {
                 "answer": item["answer"],
@@ -203,7 +212,7 @@ def main():
     # Load .env if available
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(override=True)
     except ImportError:
         pass  # python-dotenv is optional
 
