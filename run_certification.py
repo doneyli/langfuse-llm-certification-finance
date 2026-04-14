@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""
+Run LLM Model Certification Experiments
+
+Runs a Langfuse dataset through a model under test, evaluates outputs with
+financial evaluators, and reports pass/fail certification status.
+
+Usage:
+    python run_certification.py --dataset certification/financebench-sample
+    python run_certification.py --dataset certification/financebench-v1 --model gpt-4o
+    python run_certification.py --dataset certification/fpb-sample --evaluators sentiment
+    python run_certification.py --dataset certification/financebench-v1 --threshold 0.90
+    python run_certification.py --dry-run --dataset certification/financebench-sample
+
+Environment variables:
+    LANGFUSE_PUBLIC_KEY   (required)
+    LANGFUSE_SECRET_KEY   (required)
+    LANGFUSE_BASE_URL     (default: https://cloud.langfuse.com)
+    LLM_API_KEY           (required - OpenAI-compatible API key)
+    LLM_BASE_URL          (default: https://api.openai.com/v1)
+    LLM_MODEL             (default: claude-sonnet-4-6)
+    ANTHROPIC_API_KEY     (required for Claude models via native Anthropic SDK)
+
+Prerequisites:
+    pip install 'langfuse>=3.0,<4.0' openai
+    pip install anthropic   # optional, for native Claude API
+"""
+
+import argparse
+import os
+import sys
+from datetime import datetime
+
+try:
+    from langfuse import get_client, Evaluation
+    from langfuse.openai import OpenAI as LangfuseOpenAI
+except ImportError:
+    print("Error: langfuse package not installed. Run: pip install 'langfuse>=3.0,<4.0'",
+          file=sys.stderr)
+    sys.exit(1)
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
+from evaluators import (
+    exact_match_evaluator,
+    numerical_accuracy_evaluator,
+    sentiment_evaluator,
+    regulatory_compliance_evaluator,
+    response_completeness_evaluator,
+    average_score_evaluator,
+    certification_gate,
+)
+
+
+# --------------- CLI ---------------
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run LLM model certification experiments via Langfuse"
+    )
+    parser.add_argument("--dataset", type=str, required=True,
+                        help="Langfuse dataset name (e.g., certification/financebench-sample)")
+    parser.add_argument("--model", type=str,
+                        default=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
+                        help="Model to certify (default: LLM_MODEL env or claude-sonnet-4-6)")
+    parser.add_argument("--endpoint", type=str,
+                        default=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
+                        help="LLM API base URL (default: LLM_BASE_URL env)")
+    parser.add_argument("--max-concurrency", type=int, default=5,
+                        help="Max concurrent LLM calls (default: 5)")
+    parser.add_argument("--threshold", type=float, default=0.85,
+                        help="Certification pass threshold (default: 0.85)")
+    parser.add_argument("--run-name", type=str, default=None,
+                        help="Custom run name (default: auto-generated)")
+    parser.add_argument("--evaluators", type=str, default="all",
+                        choices=["all", "accuracy", "compliance", "sentiment"],
+                        help="Which evaluators to use (default: all applicable)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Preview dataset items without running experiments")
+    return parser.parse_args()
+
+
+# --------------- LLM Clients ---------------
+
+def is_openai_model(model: str) -> bool:
+    """Check if model should use OpenAI-compatible API."""
+    return model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3")
+
+
+def is_claude_native(model: str) -> bool:
+    """Check if model should use native Anthropic SDK."""
+    return model.startswith("claude") and anthropic is not None
+
+
+def call_anthropic_native(question: str, model: str) -> str:
+    """Call Claude via native Anthropic SDK."""
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model=model,
+        max_tokens=2048,
+        messages=[{"role": "user", "content": question}],
+    )
+    return response.content[0].text
+
+
+def call_openai_compatible(question: str, model: str, endpoint: str, api_key: str) -> str:
+    """Call any model via OpenAI-compatible API with Langfuse auto-tracing."""
+    client = LangfuseOpenAI(base_url=endpoint, api_key=api_key)
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=2048,
+        messages=[{"role": "user", "content": question}],
+    )
+    return response.choices[0].message.content
+
+
+# --------------- Task Function ---------------
+
+def create_certification_task(model: str, endpoint: str, api_key: str):
+    """Create a task function that calls the model under test.
+
+    The task function is called once per dataset item. It sends the input
+    to the model and returns the raw output text.
+    """
+    def task(*, item, **kwargs):
+        # Handle both DatasetItem (.input) and dict (["input"]) formats
+        inp = item.input if hasattr(item, 'input') else item.get("input", {})
+
+        # Extract the question/text from the input
+        if isinstance(inp, dict):
+            question = inp.get("question", inp.get("text", ""))
+        else:
+            question = str(inp)
+
+        if not question:
+            return "Error: no question found in dataset item"
+
+        # Route to appropriate LLM client
+        if is_claude_native(model):
+            return call_anthropic_native(question, model)
+        else:
+            return call_openai_compatible(question, model, endpoint, api_key)
+
+    return task
+
+
+# --------------- Evaluator Selection ---------------
+
+def select_evaluators(evaluator_mode: str, dataset_name: str, threshold: float):
+    """Select item and run evaluators based on dataset type and mode."""
+    is_sentiment = "fpb" in dataset_name.lower()
+
+    item_evaluators = []
+    run_evaluators = []
+    primary_score = None
+
+    if evaluator_mode in ("all", "accuracy"):
+        if is_sentiment:
+            item_evaluators.append(sentiment_evaluator)
+            primary_score = "sentiment_accuracy"
+        else:
+            item_evaluators.append(numerical_accuracy_evaluator)
+            item_evaluators.append(exact_match_evaluator)
+            primary_score = "numerical_accuracy"
+
+    if evaluator_mode in ("all", "sentiment") and is_sentiment:
+        if sentiment_evaluator not in item_evaluators:
+            item_evaluators.append(sentiment_evaluator)
+            primary_score = primary_score or "sentiment_accuracy"
+
+    if evaluator_mode in ("all", "compliance"):
+        item_evaluators.append(regulatory_compliance_evaluator)
+
+    if evaluator_mode == "all":
+        item_evaluators.append(response_completeness_evaluator)
+
+    # Run-level evaluators
+    if primary_score:
+        run_evaluators.append(average_score_evaluator(primary_score))
+        run_evaluators.append(certification_gate(primary_score, threshold))
+
+    return item_evaluators, run_evaluators, primary_score
+
+
+# --------------- Main ---------------
+
+def main():
+    args = parse_args()
+
+    # Load .env if available
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    # Validate credentials
+    api_key = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+    if is_claude_native(args.model):
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            print(f"Error: ANTHROPIC_API_KEY required for model {args.model}", file=sys.stderr)
+            sys.exit(1)
+    elif not api_key:
+        print("Error: LLM_API_KEY (or OPENAI_API_KEY) required", file=sys.stderr)
+        sys.exit(1)
+
+    # Initialize Langfuse
+    langfuse = get_client()
+
+    print("LLM Certification Runner", file=sys.stderr)
+    print("=" * 50, file=sys.stderr)
+    print(f"  Model:       {args.model}", file=sys.stderr)
+    print(f"  Endpoint:    {args.endpoint}", file=sys.stderr)
+    print(f"  Dataset:     {args.dataset}", file=sys.stderr)
+    print(f"  Threshold:   {args.threshold:.0%}", file=sys.stderr)
+    print(f"  Concurrency: {args.max_concurrency}", file=sys.stderr)
+
+    # Load dataset
+    try:
+        dataset = langfuse.get_dataset(args.dataset)
+        print(f"  Items:       {len(dataset.items)}", file=sys.stderr)
+    except Exception as e:
+        print(f"\nError loading dataset '{args.dataset}': {e}", file=sys.stderr)
+        print("Run setup_datasets.py first to create the dataset.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.dry_run:
+        print("\n  ** DRY RUN - no experiments will be run **\n", file=sys.stderr)
+        for item in dataset.items:
+            inp = item.input if isinstance(item.input, dict) else {"raw": str(item.input)}
+            preview = inp.get("question", inp.get("text", str(inp)))[:80]
+            print(f"  [{item.id[:8]}] {preview}...", file=sys.stderr)
+        return
+
+    # Select evaluators
+    item_evaluators, run_evaluators, primary_score = select_evaluators(
+        args.evaluators, args.dataset, args.threshold
+    )
+    print(f"  Evaluators:  {[e.__name__ if hasattr(e, '__name__') else str(e) for e in item_evaluators]}", file=sys.stderr)
+
+    # Generate run name
+    run_name = args.run_name or (
+        f"{args.model}-{args.dataset.split('/')[-1]}-"
+        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+
+    # Run experiment
+    print(f"\n  Run name: {run_name}", file=sys.stderr)
+    print(f"  Running experiment...\n", file=sys.stderr)
+
+    result = dataset.run_experiment(
+        name=args.dataset.split("/")[-1],
+        run_name=run_name,
+        description=f"Model certification: {args.model} against {args.dataset}",
+        task=create_certification_task(args.model, args.endpoint, api_key),
+        evaluators=item_evaluators,
+        run_evaluators=run_evaluators,
+        max_concurrency=args.max_concurrency,
+        metadata={
+            "model": args.model,
+            "endpoint": args.endpoint,
+            "dataset": args.dataset,
+            "threshold": args.threshold,
+            "evaluator_mode": args.evaluators,
+        },
+    )
+
+    # Print results
+    print("=" * 50, file=sys.stderr)
+    print("Results:", file=sys.stderr)
+    print(result.format(), file=sys.stderr)
+
+    # Print certification summary
+    print("\n" + "=" * 50, file=sys.stderr)
+    print("CERTIFICATION SUMMARY", file=sys.stderr)
+    print("=" * 50, file=sys.stderr)
+    print(f"  Model:     {args.model}", file=sys.stderr)
+    print(f"  Dataset:   {args.dataset}", file=sys.stderr)
+    print(f"  Threshold: {args.threshold:.0%}", file=sys.stderr)
+
+    for ev in result.run_evaluations:
+        if ev.name == "certification_result":
+            status = "PASSED" if ev.value == 1.0 else "FAILED"
+            print(f"  Result:    {status}", file=sys.stderr)
+            print(f"  Detail:    {ev.comment}", file=sys.stderr)
+            break
+    else:
+        print("  Result:    NO CERTIFICATION GATE CONFIGURED", file=sys.stderr)
+
+    for ev in result.run_evaluations:
+        if ev.name.startswith("avg_"):
+            print(f"  {ev.name}: {ev.comment}", file=sys.stderr)
+
+    print(f"\nView details in Langfuse UI > Datasets > {args.dataset} > Runs", file=sys.stderr)
+
+    # Flush
+    langfuse.flush()
+
+
+if __name__ == "__main__":
+    main()
