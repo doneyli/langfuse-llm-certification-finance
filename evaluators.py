@@ -5,12 +5,15 @@ Financial Evaluators for LLM Certification
 Custom evaluator functions for scoring LLM outputs against financial datasets.
 All evaluators follow the Langfuse SDK signature and return Evaluation objects.
 
-Item-level evaluators:
+Item-level evaluators (deterministic):
     exact_match_evaluator          - Strict string containment check
     numerical_accuracy_evaluator   - Number extraction + tolerance comparison
     sentiment_evaluator            - Sentiment classification accuracy
     regulatory_compliance_evaluator - Prohibited phrase detection
     response_completeness_evaluator - Length and structure scoring
+
+Item-level evaluators (LLM-as-a-Judge):
+    groundedness_evaluator         - Faithfulness + completeness vs source evidence
 
 Run-level evaluators (factories):
     average_score_evaluator(name)          - Average a named score across items
@@ -24,6 +27,8 @@ Usage:
     )
 """
 
+import json
+import os
 import re
 
 try:
@@ -37,6 +42,19 @@ except ImportError:
         name: str
         value: float = None
         comment: str = ""
+
+try:
+    import anthropic as _anthropic
+    _anthropic_client = None
+
+    def _get_anthropic_client():
+        global _anthropic_client
+        if _anthropic_client is None:
+            _anthropic_client = _anthropic.Anthropic()
+        return _anthropic_client
+except ImportError:
+    _anthropic = None
+    _get_anthropic_client = None
 
 
 # --------------- Configuration ---------------
@@ -258,6 +276,104 @@ def response_completeness_evaluator(*, output, **kwargs):
         comment += " with structured formatting"
 
     return Evaluation(name="completeness", value=round(score, 2), comment=comment)
+
+
+# --------------- LLM-as-a-Judge Evaluators ---------------
+
+GROUNDEDNESS_RUBRIC = """\
+You are an expert financial auditor evaluating whether an AI assistant's answer \
+is grounded in the provided source documents.
+
+<source_documents>
+{evidence}
+</source_documents>
+
+<question>
+{question}
+</question>
+
+<assistant_answer>
+{output}
+</assistant_answer>
+
+Evaluate the assistant's answer on two dimensions:
+
+1. **Faithfulness** (0.0 - 1.0): Is every claim in the answer supported by the \
+source documents? Penalize hallucinated facts, invented numbers, or statements \
+not traceable to the evidence.
+
+2. **Completeness** (0.0 - 1.0): Does the answer address the key information \
+from the source documents that is relevant to the question?
+
+Respond with ONLY a JSON object (no markdown, no extra text):
+{{"faithfulness": <float>, "completeness": <float>, "reasoning": "<1-2 sentences>"}}
+"""
+
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "claude-sonnet-4-6")
+
+
+def groundedness_evaluator(*, input, output, **kwargs):
+    """LLM-as-a-Judge: evaluate whether the model output is grounded in source evidence.
+
+    Requires the Anthropic SDK and ANTHROPIC_API_KEY. Returns None (skipped) when
+    the evaluator does not apply, since Langfuse SDK rejects scores with value=None.
+    Only applies to items that include evidence (e.g., FinanceBench with filing excerpts).
+    """
+    if _get_anthropic_client is None:
+        return None  # SDK not installed, skip score creation
+
+    # Extract evidence and question from input
+    if isinstance(input, dict):
+        evidence = input.get("evidence", [])
+        question = input.get("question", input.get("text", ""))
+    else:
+        return None  # Not applicable to this item
+
+    if not evidence or not any(evidence):
+        return None  # No source evidence to ground against
+
+    if not output:
+        return Evaluation(name="groundedness", value=0.0,
+                          comment="Empty output")
+
+    evidence_text = "\n\n".join(
+        f"[Excerpt {i}] {ev}" for i, ev in enumerate(evidence, 1) if ev
+    )
+
+    prompt = GROUNDEDNESS_RUBRIC.format(
+        evidence=evidence_text,
+        question=question,
+        output=output,
+    )
+
+    try:
+        client = _get_anthropic_client()
+        response = client.messages.create(
+            model=JUDGE_MODEL,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+
+        parsed = json.loads(raw)
+        faithfulness = float(parsed["faithfulness"])
+        completeness = float(parsed["completeness"])
+        reasoning = parsed.get("reasoning", "")
+
+        # Combined score: weighted toward faithfulness (more important for finance)
+        score = round(0.7 * faithfulness + 0.3 * completeness, 3)
+
+        return Evaluation(
+            name="groundedness",
+            value=score,
+            comment=f"faithfulness={faithfulness}, completeness={completeness}. {reasoning}",
+        )
+    except (json.JSONDecodeError, KeyError) as e:
+        return Evaluation(name="groundedness", value=0.0,
+                          comment=f"Judge response parse error: {e}. Raw: {raw[:200]}")
+    except Exception as e:
+        return Evaluation(name="groundedness", value=0.0,
+                          comment=f"Judge call failed: {e}")
 
 
 # --------------- Run-Level Evaluators ---------------
