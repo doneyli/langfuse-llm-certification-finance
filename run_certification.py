@@ -87,6 +87,8 @@ def parse_args():
     parser.add_argument("--queue-failures", action="store_true",
                         help="Route failed items to the 'Certification Review' "
                              "annotation queue for human review")
+    parser.add_argument("--ci", action="store_true",
+                        help="CI mode: exit with code 1 if certification fails")
     return parser.parse_args()
 
 
@@ -124,14 +126,43 @@ def call_openai_compatible(question: str, model: str, endpoint: str, api_key: st
     return response.choices[0].message.content
 
 
-# --------------- Task Function ---------------
+# --------------- Prompt Management ---------------
+
+# Hardcoded fallbacks used when Langfuse prompt management is unavailable.
+_FALLBACK_QA = (
+    "You are a financial analyst. Answer the question using ONLY the "
+    "provided source document excerpts. Be precise with numbers.\n\n"
+    "{{evidence}}\n\n"
+    "--- Question ---\n{{question}}"
+)
+
+_FALLBACK_SENTIMENT = (
+    "You are a financial analyst. Classify the sentiment of the following "
+    "financial text as exactly one of: positive, negative, or neutral.\n\n"
+    "Text: {{text}}\n\n"
+    "Respond with only the sentiment label."
+)
+
+
+def _get_prompt_template(name: str, fallback: str) -> str:
+    """Fetch a prompt template from Langfuse, falling back to hardcoded default."""
+    try:
+        langfuse = get_client()
+        prompt = langfuse.get_prompt(name, label="production", fallback=fallback)
+        return prompt
+    except Exception:
+        return None
+
 
 def _build_prompt(inp: dict) -> str:
     """Build the full prompt from a dataset item's input.
 
+    Fetches the prompt template from Langfuse prompt management (production label).
+    Falls back to hardcoded templates if Langfuse is unavailable.
+
     If the input includes evidence (excerpts from financial filings),
-    include it as context so the model can answer from the source document
-    rather than guessing. This simulates a RAG pipeline.
+    uses the 'financial-qa' prompt. Otherwise, uses 'financial-sentiment'
+    for sentiment items, or returns the raw question.
     """
     question = inp.get("question", inp.get("text", ""))
     evidence = inp.get("evidence", [])
@@ -143,12 +174,19 @@ def _build_prompt(inp: dict) -> str:
                 context_parts.append(f"--- Source Document Excerpt {i} ---\n{ev}")
         context_block = "\n\n".join(context_parts)
 
-        return (
-            f"You are a financial analyst. Answer the question using ONLY the "
-            f"provided source document excerpts. Be precise with numbers.\n\n"
-            f"{context_block}\n\n"
-            f"--- Question ---\n{question}"
-        )
+        prompt = _get_prompt_template("financial-qa", _FALLBACK_QA)
+        if prompt is not None:
+            return prompt.compile(evidence=context_block, question=question)
+
+        # Direct fallback if prompt object failed
+        return _FALLBACK_QA.replace("{{evidence}}", context_block).replace("{{question}}", question)
+
+    # Sentiment items (text-only, no evidence)
+    if "text" in inp and "question" not in inp:
+        prompt = _get_prompt_template("financial-sentiment", _FALLBACK_SENTIMENT)
+        if prompt is not None:
+            return prompt.compile(text=question)
+        return _FALLBACK_SENTIMENT.replace("{{text}}", question)
 
     return question
 
@@ -465,6 +503,12 @@ def main():
 
     # Flush
     langfuse.flush()
+
+    # CI mode: exit with code 1 if certification failed
+    if args.ci:
+        for ev in result.run_evaluations:
+            if ev.name == "certification_result" and ev.value != 1.0:
+                sys.exit(1)
 
 
 if __name__ == "__main__":

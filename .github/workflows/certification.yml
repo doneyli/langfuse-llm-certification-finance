@@ -1,0 +1,108 @@
+name: LLM Certification
+
+on:
+  # Manual trigger with configurable model
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model to certify'
+        required: false
+        default: 'claude-haiku-4-5-20251001'
+      threshold:
+        description: 'Pass threshold (0.0-1.0)'
+        required: false
+        default: '0.85'
+
+  # Auto-trigger on changes to prompts, evaluators, or certification config
+  push:
+    branches: [main]
+    paths:
+      - 'evaluators.py'
+      - 'run_certification.py'
+      - 'setup_prompts.py'
+      - '.env.example'
+
+env:
+  LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+  LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+  LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  certify-financebench:
+    name: FinanceBench Certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install anthropic
+
+      - name: Run FinanceBench certification
+        run: |
+          python run_certification.py \
+            --dataset certification/financebench-sample \
+            --model ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }} \
+            --threshold ${{ github.event.inputs.threshold || '0.85' }} \
+            --ci
+
+  certify-fpb:
+    name: FPB Sentiment Certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install anthropic
+
+      - name: Run FPB sentiment certification
+        run: |
+          python run_certification.py \
+            --dataset certification/fpb-sample \
+            --model ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }} \
+            --threshold ${{ github.event.inputs.threshold || '0.85' }} \
+            --ci
+
+  pytest-gate:
+    name: Pytest Certification Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [certify-financebench, certify-fpb]
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install anthropic pytest
+
+      - name: Run certification tests
+        env:
+          CERT_MODEL: ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }}
+          CERT_THRESHOLD: ${{ github.event.inputs.threshold || '0.85' }}
+        run: pytest tests/test_certification.py -v --tb=short

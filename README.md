@@ -56,11 +56,12 @@ pip install -r requirements.txt
 python setup_datasets.py --dataset financebench --sample
 ```
 
-### 3. Set Up Score Configs and Annotation Queues
+### 3. Set Up Langfuse Configuration
 
 ```bash
 python setup_score_configs.py        # Register score types in Langfuse
 python setup_annotation_queues.py    # Create human review queue
+python setup_prompts.py              # Register prompt templates
 ```
 
 ### 4. Run Certification
@@ -132,6 +133,37 @@ Creates annotation queues in Langfuse for human review of certification results.
 Options:
   --dry-run    Preview queues without creating
 ```
+
+### `setup_prompts.py` - Prompt Template Setup
+
+Registers certification prompt templates in Langfuse prompt management. Once created, prompts can be edited, versioned, and promoted in the Langfuse UI without code changes.
+
+```
+Options:
+  --dry-run    Preview prompts without creating
+```
+
+**Managed prompts:**
+
+| Prompt | Variables | Used For |
+|--------|-----------|----------|
+| `financial-qa` | `{{evidence}}`, `{{question}}` | FinanceBench items with filing excerpts |
+| `financial-sentiment` | `{{text}}` | Financial PhraseBank sentiment classification |
+
+### `monitor_production.py` - Production Monitor
+
+Fetches recent production traces from Langfuse and runs deterministic evaluators (compliance, completeness) on any unscored traces. Designed to run on a schedule for continuous monitoring.
+
+```
+Options:
+  --hours N              Look back N hours (default: 1)
+  --tags TAG [TAG ...]   Filter traces by tags
+  --trace-name NAME      Filter traces by name
+  --limit N              Max traces to process (default: 100)
+  --dry-run              Preview without posting scores
+```
+
+Exits with code 1 if compliance violations are detected, enabling integration with alerting systems.
 
 ### `run_certification.py` - Experiment Runner
 
@@ -253,6 +285,26 @@ export LLM_API_KEY="your-key"
 python run_certification.py --endpoint https://your-gateway.internal/v1 --dataset ...
 ```
 
+## Prompt Management
+
+Certification prompts are managed in Langfuse rather than hardcoded. This enables versioning, A/B testing, and prompt updates without code changes.
+
+### Setup
+
+```bash
+python setup_prompts.py    # Creates financial-qa and financial-sentiment prompts
+```
+
+### Updating Prompts
+
+1. Open Langfuse UI > **Prompts** > select a prompt
+2. Edit the prompt text — a new immutable version is created automatically
+3. Test the new version by running a certification experiment
+4. Move the `production` label to the new version to deploy it
+5. To roll back, reassign `production` to a previous version
+
+The experiment runner always fetches the `production`-labeled version. If Langfuse is unavailable, it falls back to hardcoded defaults so the pipeline never breaks.
+
 ## Human Review (Annotation Queues)
 
 The pipeline supports human-in-the-loop review for compliance sign-off and evaluator calibration.
@@ -288,30 +340,85 @@ Human annotations serve two purposes:
 - **Compliance audit trail** — documented human sign-off on certification results
 - **Evaluator calibration** — compare human scores against automated scores to validate the evaluation rubrics
 
+## Production Monitoring
+
+Once a model is certified and deployed, `monitor_production.py` continuously monitors live traces for compliance violations and quality degradation.
+
+### Scheduled Monitoring
+
+Run on a cron schedule to catch issues in real-time:
+
+```bash
+# Every 15 minutes, check the last hour of production traces
+*/15 * * * * cd /path/to/repo && python monitor_production.py --hours 1 --tags production
+
+# Or filter by your application's trace name
+*/15 * * * * cd /path/to/repo && python monitor_production.py --trace-name my-finance-app
+```
+
+### How It Works
+
+1. Fetches recent traces from the Langfuse API (filtered by time window, tags, or trace name)
+2. Skips traces that already have compliance scores (idempotent)
+3. Runs `regulatory_compliance` and `completeness` evaluators on each trace
+4. Posts scores back to Langfuse
+5. Reports any compliance violations and exits with code 1 (for alerting integration)
+
+### Online LLM-as-a-Judge (via Langfuse UI)
+
+For subjective quality monitoring (groundedness, helpfulness), configure LLM-as-a-Judge evaluators directly in the Langfuse UI:
+
+1. Go to **Evaluators** > **Set up Evaluator**
+2. Select a managed evaluator (e.g., Hallucination, Helpfulness) or create a custom one
+3. Choose "Live Observations" as the target and filter to your production traces
+4. Set a sampling rate (e.g., 10%) to manage cost
+5. Langfuse runs the judge automatically on matching observations
+
+See [Langfuse LLM-as-a-Judge docs](https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge) for details.
+
 ## CI/CD Integration
 
-Gate deployments with pytest:
+### CLI Gate
 
-```python
-# test_certification.py
-from langfuse import get_client
-from run_certification import create_certification_task
-from evaluators import numerical_accuracy_evaluator, certification_gate
+Use `--ci` to fail the process on certification failure (exit code 1):
 
-def test_model_meets_threshold():
-    langfuse = get_client()
-    dataset = langfuse.get_dataset("certification/financebench-v1")
-
-    result = dataset.run_experiment(
-        name="ci-gate",
-        task=create_certification_task("claude-sonnet-4-6", "https://api.openai.com/v1", "sk-..."),
-        evaluators=[numerical_accuracy_evaluator],
-        run_evaluators=[certification_gate("numerical_accuracy", threshold=0.85)],
-    )
-
-    cert = next(ev for ev in result.run_evaluations if ev.name == "certification_result")
-    assert cert.value == 1.0, f"Certification failed: {cert.comment}"
+```bash
+python run_certification.py \
+  --dataset certification/financebench-sample \
+  --model claude-haiku-4-5-20251001 \
+  --threshold 0.85 \
+  --ci
 ```
+
+### Pytest Gate
+
+`tests/test_certification.py` provides pytest tests that run certification experiments and assert pass/fail:
+
+```bash
+# Run all certification tests
+pytest tests/test_certification.py -v
+
+# Run only FinanceBench tests
+pytest tests/test_certification.py -v -k financebench
+
+# Override model and threshold via env vars
+CERT_MODEL=claude-sonnet-4-6 CERT_THRESHOLD=0.90 pytest tests/test_certification.py -v
+```
+
+Tests cover:
+- `TestFinanceBenchCertification::test_numerical_accuracy_meets_threshold`
+- `TestFinanceBenchCertification::test_regulatory_compliance`
+- `TestFPBCertification::test_sentiment_accuracy_meets_threshold`
+
+### GitHub Actions
+
+`.github/workflows/certification.yml` provides automated certification:
+
+- **Triggers:** manual dispatch (with configurable model/threshold) and push to `main` when evaluators, prompts, or certification config change
+- **Jobs:** runs FinanceBench and FPB certification in parallel, then runs the pytest gate
+- **Secrets required:** `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `ANTHROPIC_API_KEY`
+
+To trigger manually: **Actions** > **LLM Certification** > **Run workflow** > choose model and threshold.
 
 ## Expanding to More Financial Datasets
 

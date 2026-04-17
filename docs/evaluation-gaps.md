@@ -89,21 +89,25 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 
 ## Gap 4: Prompt Management
 
-**Status: Todo**
+**Status: Done**
 
-**Problem:** The system prompt is hardcoded in `run_certification.py:_build_prompt()`. Changes to the prompt require code changes and redeployment. There is no version history or ability to A/B test prompt strategies.
+**Problem:** The system prompt was hardcoded in `run_certification.py:_build_prompt()`. Changes required code changes and redeployment. No version history or A/B testing.
 
-**What Langfuse offers:** Prompt Management with:
-- Versioning: every edit creates a new immutable version
-- Labels: `production`, `staging`, `latest`, or custom labels
-- Deployment workflow: test in dev, promote to production, rollback if needed
-- Code references labels, so prompt updates don't require code changes
+**What we added:**
 
-**Action items:**
-- [ ] Create a `financial-qa` prompt in Langfuse with the current system prompt text
-- [ ] Update `_build_prompt()` to fetch the prompt from Langfuse via `langfuse.get_prompt("financial-qa", label="production")`
-- [ ] Create a `financial-sentiment` prompt for the FPB dataset
-- [ ] Document the prompt update workflow for the team
+1. **`setup_prompts.py`** — creates two prompt templates in Langfuse with `production` labels:
+   - `financial-qa` — system prompt for financial QA with `{{evidence}}` and `{{question}}` variables
+   - `financial-sentiment` — sentiment classification prompt with `{{text}}` variable
+
+2. **`_build_prompt()` updated** — now fetches the `production`-labeled prompt from Langfuse at runtime using `langfuse.get_prompt()`. Falls back to hardcoded templates if Langfuse is unavailable, so the pipeline works without prompt management configured.
+
+**Prompt update workflow:**
+1. Open Langfuse UI > **Prompts** > select a prompt (e.g., `financial-qa`)
+2. Edit the prompt text — this creates a new immutable version
+3. Test the new version by running a certification experiment (it picks up `latest` by default)
+4. When satisfied, move the `production` label to the new version
+5. All future certification runs automatically use the new prompt — no code changes needed
+6. To roll back, reassign the `production` label back to a previous version
 
 **Langfuse reference:** [Prompt Management](https://langfuse.com/docs/prompt-management/get-started)
 
@@ -111,21 +115,34 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 
 ## Gap 5: Production Monitoring (Online Evaluation)
 
-**Status: Todo**
+**Status: Done**
 
-**Problem:** The pipeline only runs offline experiments (batch certification). Once a model is certified and deployed to production, there is no continuous monitoring for quality degradation, compliance violations, or hallucinations in live traffic.
+**Problem:** The pipeline only ran offline experiments (batch certification). Once a model is certified and deployed to production, there was no continuous monitoring for quality degradation or compliance violations.
 
-**What Langfuse offers:** Online LLM-as-a-Judge evaluators that run automatically on live traces:
-- Observation-level evaluators (recommended): run on individual LLM calls, complete in seconds
-- Filter by trace name, tags, user, metadata
-- Sampling support (e.g., evaluate 5% of traffic) to manage cost
-- Scores feed into dashboards for real-time monitoring
+**What we added:**
 
-**Action items:**
-- [ ] Set up an online `regulatory_compliance` evaluator — deterministic checks are on the Langfuse roadmap ([GitHub discussion](https://github.com/orgs/langfuse/discussions/6087)), but in the meantime this can be done via the SDK as a post-processing step
-- [ ] Set up an online `groundedness` LLM-as-a-Judge evaluator with sampling (e.g., 10% of production traces)
+1. **`monitor_production.py`** — a script that fetches recent production traces from Langfuse, runs deterministic evaluators (`regulatory_compliance`, `completeness`) on any unscored traces, and posts scores back. Designed to run on a schedule (e.g., cron every 15 minutes).
+   - Filters by lookback window (`--hours`), tags (`--tags production`), or trace name (`--trace-name`)
+   - Skips traces that already have compliance scores (idempotent)
+   - Exits with code 1 if compliance violations are detected (for alerting integration)
+   - Supports `--dry-run` for preview
+
+2. **Usage examples:**
+   ```bash
+   # Score unscored traces from the last hour
+   python monitor_production.py
+
+   # Monitor production-tagged traces from the last 24h
+   python monitor_production.py --hours 24 --tags production
+
+   # Cron: every 15 minutes, score new traces
+   */15 * * * * cd /path/to/repo && python monitor_production.py --hours 1
+   ```
+
+**Future work:**
+- [ ] Set up online `groundedness` LLM-as-a-Judge evaluator in the Langfuse UI with sampling (e.g., 10% of production traces) — this requires an LLM Connection configured in Langfuse Settings
 - [ ] Create a Custom Dashboard in Langfuse to monitor compliance and groundedness scores over time
-- [ ] Define alerting thresholds — if avg groundedness drops below 0.7 in a 1-hour window, flag for review
+- [ ] Integrate with alerting (e.g., PagerDuty/Slack) when `monitor_production.py` exits with code 1
 
 **Langfuse reference:** [LLM-as-a-Judge for online evaluation](https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge), [Custom Dashboards](https://langfuse.com/docs/metrics/features/custom-dashboards)
 
@@ -133,17 +150,25 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 
 ## Gap 6: CI/CD Test File
 
-**Status: Todo**
+**Status: Done**
 
-**Problem:** The README shows a `test_certification.py` pytest example for gating deployments, but the file does not actually exist in the repo. There is no GitHub Actions workflow to run certifications automatically.
+**Problem:** The README showed a `test_certification.py` pytest example for gating deployments, but the file did not exist. No GitHub Actions workflow existed.
 
-**Action items:**
-- [ ] Create `tests/test_certification.py` with the pytest gate from the README
-- [ ] Parameterize the test for multiple datasets (financebench, fpb)
-- [ ] Create `.github/workflows/certification.yml` GitHub Actions workflow:
-  - Trigger on: model config changes, prompt updates, manual dispatch
-  - Steps: install deps, run certification against sample datasets, fail the workflow if certification fails
-- [ ] Add a `--ci` flag to `run_certification.py` that returns exit code 1 on certification failure (currently it always exits 0)
-- [ ] Document the CI/CD setup in the README
+**What we added:**
+
+1. **`--ci` flag** on `run_certification.py` — exits with code 1 if certification fails, enabling use as a CI gate.
+
+2. **`tests/test_certification.py`** — pytest tests that run certification experiments:
+   - `TestFinanceBenchCertification::test_numerical_accuracy_meets_threshold`
+   - `TestFinanceBenchCertification::test_regulatory_compliance`
+   - `TestFPBCertification::test_sentiment_accuracy_meets_threshold`
+   - Configurable via `CERT_MODEL` and `CERT_THRESHOLD` env vars
+
+3. **`.github/workflows/certification.yml`** — GitHub Actions workflow:
+   - Manual dispatch with configurable model and threshold inputs
+   - Auto-triggers on push to `main` when evaluators, prompts, or config change
+   - Runs FinanceBench and FPB certification in parallel with `--ci`
+   - Runs pytest gate after both complete
+   - Requires secrets: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `ANTHROPIC_API_KEY`
 
 **Langfuse reference:** [Experiments via SDK](https://langfuse.com/docs/evaluation/experiments/experiments-via-sdk)
