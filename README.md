@@ -71,9 +71,15 @@ python run_certification.py --dataset certification/financebench-sample \
   --model claude-sonnet-4-6 --queue-failures
 ```
 
-### 5. View Results
+### 5. Launch the Portal
 
-Open your Langfuse UI > **Datasets** > `certification/financebench-sample` > **Runs**
+```bash
+python -m portal.app    # Opens on http://localhost:8050
+```
+
+### 6. View Results
+
+Open `http://localhost:8050` for the Certification Dashboard, or Langfuse UI > **Datasets** > `certification/financebench-sample` > **Runs**
 
 ### 6. Review Failed Items
 
@@ -431,6 +437,57 @@ The [Open FinLLM Leaderboard](https://huggingface.co/spaces/TheFinAI/Open-Financ
 | Credit Risk (German) | Credit scoring | `ChanceFocus/flare-german` |
 | Credit Risk (Taiwan) | Credit risk assessment | `TheFinAI/cra-taiwan` |
 | TATQA | Table + text hybrid QA | `ChanceFocus/flare-tatqa` |
+
+## Certification Portal
+
+A web dashboard for business and compliance stakeholders to view certification status at a glance.
+
+### Running the Portal
+
+```bash
+python -m portal.app                     # Default: http://localhost:8050
+PORTAL_PORT=9000 python -m portal.app    # Custom port
+```
+
+### Pages
+
+| Page | URL | Description |
+|------|-----|-------------|
+| Dashboard | `/` | Certification matrix — which models pass/fail against which datasets |
+| Breakdown | `/breakdown/{dataset}/{run}` | Evaluator scores (bar chart + table) for a specific run |
+| History | `/history/{dataset}` | Timeline of all runs with trend chart |
+| Run Detail | `/run/{dataset}/{run}` | Per-item scores with links to Langfuse traces |
+
+### JSON API
+
+All pages have corresponding JSON endpoints under `/api/`:
+
+```bash
+curl http://localhost:8050/api/dashboard | python -m json.tool
+curl http://localhost:8050/api/history/certification/financebench-sample
+```
+
+The portal reads live data from your Langfuse instance (same `LANGFUSE_*` credentials) with a 60-second TTL cache.
+
+### Portal vs Langfuse Dashboards
+
+Some metrics can also be visualized using [Langfuse Custom Dashboards](https://langfuse.com/docs/metrics/features/custom-dashboards) (created in the UI — no API for dashboard creation). Use both:
+
+| What to track | Where | Why |
+|---|---|---|
+| Score trends over time | **Langfuse dashboard** | Native widget: `scores-numeric` view, dimension `name`, time granularity `day` |
+| Compliance violations | **Langfuse dashboard** | Native widget: filter `name=regulatory_compliance`, count where value=0 |
+| Cost & latency by model | **Langfuse dashboard** | Native widget: `observations` view, dimension `providedModelName` |
+| Pass/fail certification matrix | **Portal** | Langfuse can't join dataset run metadata to scores or show threshold-based badges |
+| Run-level aggregation per experiment | **Portal** | Dashboards query individual scores, not scoped to a specific dataset run |
+| Per-item drill-down with all scores | **Portal** | Dashboards show aggregate charts, not item-level tables |
+| Run history & trend by dataset | **Portal** | No dataset run concept in the dashboard query engine |
+
+**Recommended Langfuse dashboard setup** (create manually in UI > Dashboards > New):
+1. **Avg scores over time** — line chart, `scores-numeric` view, measure `avg(value)`, dimension `name`, time granularity `day`
+2. **Compliance violations** — bar chart, `scores-numeric` view, filter `name=regulatory_compliance`, filter `value=0`, measure `count`
+3. **Score distribution** — bar chart, `scores-numeric` view, measure `avg(value)`, dimension `name`
+4. **Cost by model** — bar chart, `observations` view, measure `sum(totalCost)`, dimension `providedModelName`
 
 ## Environment Variables
 

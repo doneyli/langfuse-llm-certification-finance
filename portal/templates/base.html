@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Certification Portal{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-inner">
+            <a href="/" class="nav-brand">
+                <span class="nav-icon">&#9670;</span>
+                LLM Certification Portal
+            </a>
+            <div class="nav-links">
+                <a href="/" class="nav-link{% if request.url.path == '/' %} active{% endif %}">Dashboard</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <span>Powered by <a href="https://langfuse.com" target="_blank" rel="noopener">Langfuse</a> &amp; <a href="https://clickhouse.com" target="_blank" rel="noopener">ClickHouse</a></span>
+    </footer>
+
+    <script src="/static/portal.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

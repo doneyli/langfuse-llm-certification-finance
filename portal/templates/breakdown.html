@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ data.model }} — {{ data.dataset_short }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="breadcrumbs">
+        <a href="/">Dashboard</a> &rsaquo; <a href="/history/{{ data.dataset }}">{{ data.dataset_short }}</a> &rsaquo; Breakdown
+    </div>
+    <h1>
+        {{ data.model }}
+        {% if data.status == 'PASSED' %}
+        <span class="badge badge-passed"><span class="badge-dot"></span> Passed</span>
+        {% elif data.status == 'FAILED' %}
+        <span class="badge badge-failed"><span class="badge-dot"></span> Failed</span>
+        {% else %}
+        <span class="badge badge-unknown"><span class="badge-dot"></span> Unknown</span>
+        {% endif %}
+    </h1>
+    <p>{{ data.dataset }} &mdash; {{ data.run_name }}</p>
+</div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-label">Items Evaluated</div>
+        <div class="stat-value">{{ data.total_items }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Threshold</div>
+        <div class="stat-value">{{ (data.threshold * 100) | round(0) }}%</div>
+    </div>
+    {% for name, agg in data["aggregates"].items() | sort %}
+    <div class="stat-card">
+        <div class="stat-label">{{ name }}</div>
+        <div class="stat-value {{ 'green' if agg.mean >= data.threshold else 'red' }}">
+            {{ (agg.mean * 100) | round(1) }}%
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div class="card-header">Evaluator Scores</div>
+    <div class="chart-container">
+        <canvas id="breakdownChart"></canvas>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div class="card-header">Score Details</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Evaluator</th>
+                    <th>Mean</th>
+                    <th>Min</th>
+                    <th>Max</th>
+                    <th>Pass Rate</th>
+                    <th>Items</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for name, agg in data["aggregates"].items() | sort %}
+                <tr>
+                    <td><strong>{{ name }}</strong></td>
+                    <td>
+                        <div class="bar-bg">
+                            <div class="bar-fill {{ 'green' if agg.mean >= 0.5 else 'red' }}"
+                                 style="width: {{ (agg.mean * 100) | round(1) }}%"></div>
+                            <span class="bar-label">{{ (agg.mean * 100) | round(1) }}%</span>
+                        </div>
+                    </td>
+                    <td class="mono">{{ (agg.min * 100) | round(1) }}%</td>
+                    <td class="mono">{{ (agg.max * 100) | round(1) }}%</td>
+                    <td class="mono">{{ (agg.pass_rate * 100) | round(1) }}%</td>
+                    <td class="mono">{{ agg.count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div style="text-align: right;">
+    <a href="/run/{{ data.dataset }}/{{ data.run_name }}" class="btn btn-outline">View Per-Item Details &rsaquo;</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const aggs = {{ data["aggregates"] | tojson }};
+    const threshold = {{ data.threshold }};
+    renderBreakdownChart('breakdownChart', aggs, threshold);
+</script>
+{% endblock %}

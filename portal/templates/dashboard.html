@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Certification Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Certification Dashboard</h1>
+    <p>Model certification status against golden financial datasets</p>
+</div>
+
+{% set passed = rows | selectattr('status', 'equalto', 'PASSED') | list | length %}
+{% set failed = rows | selectattr('status', 'equalto', 'FAILED') | list | length %}
+{% set unknown = rows | selectattr('status', 'equalto', 'UNKNOWN') | list | length %}
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-label">Total Evaluations</div>
+        <div class="stat-value">{{ rows | length }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Certified</div>
+        <div class="stat-value green">{{ passed }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Failed</div>
+        <div class="stat-value red">{{ failed }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Pending</div>
+        <div class="stat-value">{{ unknown }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Certification Matrix</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>Dataset</th>
+                    <th>Status</th>
+                    <th>Primary Score</th>
+                    <th>Threshold</th>
+                    <th>Last Run</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td><strong>{{ row.model }}</strong></td>
+                    <td>{{ row.dataset_short }}</td>
+                    <td>
+                        {% if row.status == 'PASSED' %}
+                        <span class="badge badge-passed"><span class="badge-dot"></span> Passed</span>
+                        {% elif row.status == 'FAILED' %}
+                        <span class="badge badge-failed"><span class="badge-dot"></span> Failed</span>
+                        {% else %}
+                        <span class="badge badge-unknown"><span class="badge-dot"></span> Unknown</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if row.primary_score is not none %}
+                        <div class="bar-bg">
+                            <div class="bar-fill {{ 'green' if row.primary_score >= row.threshold else 'red' }}"
+                                 style="width: {{ (row.primary_score * 100) | round(1) }}%"></div>
+                            <span class="bar-label">{{ (row.primary_score * 100) | round(1) }}%</span>
+                        </div>
+                        {% else %}
+                        <span class="text-muted mono">&mdash;</span>
+                        {% endif %}
+                    </td>
+                    <td class="mono">{{ (row.threshold * 100) | round(0) }}%</td>
+                    <td class="text-muted">{{ row.timestamp }}</td>
+                    <td>
+                        <a href="/breakdown/{{ row.dataset }}/{{ row.run_name }}" class="btn btn-outline">Details</a>
+                        <a href="/history/{{ row.dataset }}" class="btn btn-outline">History</a>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not rows %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted" style="padding: 2rem;">
+                        No certification runs found. Run <code>python run_certification.py</code> to get started.
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ data.run_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="breadcrumbs">
+        <a href="/">Dashboard</a> &rsaquo;
+        <a href="/history/{{ data.dataset }}">{{ data.dataset_short }}</a> &rsaquo;
+        <a href="/breakdown/{{ data.dataset }}/{{ data.run_name }}">{{ data.model }}</a> &rsaquo;
+        Items
+    </div>
+    <h1>
+        Per-Item Scores
+        {% if data.status == 'PASSED' %}
+        <span class="badge badge-passed"><span class="badge-dot"></span> Passed</span>
+        {% elif data.status == 'FAILED' %}
+        <span class="badge badge-failed"><span class="badge-dot"></span> Failed</span>
+        {% else %}
+        <span class="badge badge-unknown"><span class="badge-dot"></span> Unknown</span>
+        {% endif %}
+    </h1>
+    <p>{{ data.model }} &mdash; {{ data.run_name }} &mdash; {{ data.total_items }} items</p>
+</div>
+
+<div class="card">
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Question</th>
+                    <th>Expected</th>
+                    {% for name in data["score_names"] %}
+                    <th class="text-center">{{ name }}</th>
+                    {% endfor %}
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in data["items"] %}
+                <tr>
+                    <td class="mono text-muted">{{ loop.index }}</td>
+                    <td class="truncate" title="{{ item.question }}">{{ item.question }}</td>
+                    <td class="truncate" title="{{ item.expected_short }}">{{ item.expected_short }}</td>
+                    {% for name in data["score_names"] %}
+                    <td class="text-center">
+                        {% if name in item.scores and item.scores[name].value is not none %}
+                            {% set val = item.scores[name].value %}
+                            <span class="mono score-cell {{ 'score-fail' if val == 0 else 'score-pass' }}"
+                                  title="{{ item.scores[name].comment }}">
+                                {{ (val * 100) | round(0) }}%
+                            </span>
+                        {% else %}
+                            <span class="text-muted">&mdash;</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td>
+                        <a href="{{ data.langfuse_url }}/trace/{{ item.trace_id }}"
+                           target="_blank" rel="noopener"
+                           class="btn btn-outline" title="View in Langfuse">
+                            Trace &nearr;
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

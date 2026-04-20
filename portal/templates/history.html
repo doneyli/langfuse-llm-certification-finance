@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}History — {{ dataset_short }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="breadcrumbs">
+        <a href="/">Dashboard</a> &rsaquo; {{ dataset_short }} &rsaquo; History
+    </div>
+    <h1>Run History</h1>
+    <p>{{ dataset }} &mdash; {{ runs | length }} runs</p>
+</div>
+
+{% if runs %}
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div class="card-header">Score Trend</div>
+    <div class="chart-container">
+        <canvas id="historyChart"></canvas>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header">All Runs</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Run</th>
+                    <th>Model</th>
+                    <th>Status</th>
+                    <th>{{ runs[0].primary_name if runs else 'Score' }}</th>
+                    <th>Threshold</th>
+                    <th>Date</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td class="truncate" title="{{ run.run_name }}">{{ run.run_name }}</td>
+                    <td><strong>{{ run.model }}</strong></td>
+                    <td>
+                        {% if run.status == 'PASSED' %}
+                        <span class="badge badge-passed"><span class="badge-dot"></span> Passed</span>
+                        {% elif run.status == 'FAILED' %}
+                        <span class="badge badge-failed"><span class="badge-dot"></span> Failed</span>
+                        {% else %}
+                        <span class="badge badge-unknown"><span class="badge-dot"></span> Unknown</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if run.primary_score is not none %}
+                        <span class="mono score-cell {{ 'score-pass' if run.primary_score >= run.threshold else 'score-fail' }}">
+                            {{ (run.primary_score * 100) | round(1) }}%
+                        </span>
+                        {% else %}
+                        <span class="text-muted mono">&mdash;</span>
+                        {% endif %}
+                    </td>
+                    <td class="mono">{{ (run.threshold * 100) | round(0) }}%</td>
+                    <td class="text-muted">{{ run.timestamp[:10] }}</td>
+                    <td>
+                        <a href="/breakdown/{{ dataset }}/{{ run.run_name }}" class="btn btn-outline">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const runs = {{ runs | tojson }};
+    renderHistoryChart('historyChart', runs);
+</script>
+{% endblock %}
