@@ -442,11 +442,26 @@ The [Open FinLLM Leaderboard](https://huggingface.co/spaces/TheFinAI/Open-Financ
 
 A web dashboard for business and compliance stakeholders to view certification status at a glance.
 
+The UI is a React SPA built with [Click UI](https://clickhouse.design/click-ui), the official ClickHouse design system. FastAPI exposes the JSON API and serves the built SPA.
+
 ### Running the Portal
 
 ```bash
+# First time: build the frontend
+cd portal/frontend && npm install && npm run build && cd ../..
+
 python -m portal.app                     # Default: http://localhost:8050
 PORTAL_PORT=9000 python -m portal.app    # Custom port
+```
+
+### Frontend development (live reload)
+
+```bash
+# Terminal 1: API
+python -m portal.app
+
+# Terminal 2: Vite dev server — proxies /api to :8050
+cd portal/frontend && npm run dev        # http://localhost:5173
 ```
 
 ### Pages
