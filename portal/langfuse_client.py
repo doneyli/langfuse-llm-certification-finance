@@ -44,6 +44,13 @@ class PortalClient:
         self._auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
         self._sdk = Langfuse(public_key=pk, secret_key=sk, host=host)
 
+    # Langfuse REST API enforces max limit=100 per page and returns
+    # {"data": [...], "meta": {"page", "limit", "totalItems", "totalPages"}}.
+    # Keep a hard ceiling on pages as a circuit breaker against misconfigured
+    # queries fanning into thousands of requests.
+    PAGE_SIZE = 100
+    MAX_PAGES = 100  # => 10k items max per paginated call
+
     def _api_get(self, path):
         req = urllib.request.Request(
             f"{self.host}{path}",
@@ -52,22 +59,44 @@ class PortalClient:
         resp = urllib.request.urlopen(req)
         return json.loads(resp.read())
 
+    def _paginate(self, path):
+        """Fetch all pages of a Langfuse list endpoint.
+
+        `path` may include query params; page/limit are appended by this helper.
+        Returns the concatenated `data` array.
+        """
+        sep = "&" if "?" in path else "?"
+        out = []
+        page = 1
+        while page <= self.MAX_PAGES:
+            resp = self._api_get(f"{path}{sep}limit={self.PAGE_SIZE}&page={page}")
+            batch = resp.get("data", []) or []
+            out.extend(batch)
+            meta = resp.get("meta") or {}
+            total_pages = meta.get("totalPages")
+            if total_pages is None:
+                # No meta -> fall back to "stop when batch is short"
+                if len(batch) < self.PAGE_SIZE:
+                    break
+            elif page >= total_pages:
+                break
+            page += 1
+        return out
+
     # ---- Helpers ----
 
     def _get_runs_for_dataset(self, dataset_name):
-        """Fetch runs for a dataset via REST API."""
+        """Fetch all runs for a dataset via paginated REST API."""
         encoded = urllib.parse.quote(dataset_name, safe="")
         try:
-            data = self._api_get(f"/api/public/datasets/{encoded}/runs")
-            return data.get("data", [])
+            return self._paginate(f"/api/public/datasets/{encoded}/runs")
         except Exception:
             return []
 
-    def _get_scores_by_name(self, name, limit=50):
-        """Fetch scores by name."""
+    def _get_scores_by_name(self, name):
+        """Fetch all scores with a given name (paginated)."""
         try:
-            data = self._api_get(f"/api/public/scores?name={name}&limit={limit}")
-            return data.get("data", [])
+            return self._paginate(f"/api/public/scores?name={urllib.parse.quote(name)}")
         except Exception:
             return []
 
@@ -91,7 +120,7 @@ class PortalClient:
         index = {}  # run_name -> {cert_value, cert_comment, primary_score}
 
         # Get certification_result scores
-        cert_scores = self._get_scores_by_name("certification_result", limit=50)
+        cert_scores = self._get_scores_by_name("certification_result")
         for s in cert_scores:
             trace = self._get_trace(s["traceId"])
             if not trace:
@@ -106,7 +135,7 @@ class PortalClient:
 
         # Get avg scores
         for avg_name in ["avg_numerical_accuracy", "avg_sentiment_accuracy", "avg_groundedness"]:
-            avg_scores = self._get_scores_by_name(avg_name, limit=50)
+            avg_scores = self._get_scores_by_name(avg_name)
             for s in avg_scores:
                 trace = self._get_trace(s["traceId"])
                 if not trace:
@@ -263,14 +292,13 @@ class PortalClient:
 
         meta = target_run.get("metadata") or {}
 
-        # Get run items via REST
+        # Get all run items via paginated REST
         ds_id = dataset.id
         try:
-            run_items_data = self._api_get(
-                f"/api/public/dataset-run-items?datasetId={ds_id}"
-                f"&runName={run_name}&limit=100"
+            encoded_run = urllib.parse.quote(run_name)
+            run_items = self._paginate(
+                f"/api/public/dataset-run-items?datasetId={ds_id}&runName={encoded_run}"
             )
-            run_items = run_items_data.get("data", [])
         except Exception:
             run_items = []
 
@@ -284,12 +312,12 @@ class PortalClient:
             trace_id = ri.get("traceId", "")
             item_scores = {}
 
-            # Get scores for this trace
+            # Get all scores for this trace (paginated — a trace can have many)
             try:
-                scores_data = self._api_get(
-                    f"/api/public/scores?traceId={trace_id}&limit=50"
+                trace_scores = self._paginate(
+                    f"/api/public/scores?traceId={trace_id}"
                 )
-                for s in scores_data.get("data", []):
+                for s in trace_scores:
                     sname = s["name"]
                     if sname in RUN_LEVEL_SCORES:
                         continue
