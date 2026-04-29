@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import {
   BigStat,
@@ -18,7 +19,9 @@ import StatusBadge from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { datasetLabel } from "../lib/datasets";
 import { shortDate } from "../lib/format";
-import type { DashboardRow } from "../types";
+import type { CertStatus, DashboardRow } from "../types";
+
+type Filter = "ALL" | CertStatus;
 
 const headers: TableColumnConfigProps[] = [
   { label: "Model" },
@@ -83,8 +86,47 @@ function tableRow(row: DashboardRow): TableRowType {
   };
 }
 
+interface FilterStatProps {
+  label: string;
+  count: number;
+  filter: Filter;
+  active: Filter;
+  onSelect: (f: Filter) => void;
+  variant?: "default" | "danger" | "muted";
+}
+
+function FilterStat({
+  label,
+  count,
+  filter,
+  active,
+  onSelect,
+  variant = "default",
+}: FilterStatProps) {
+  const isActive = active === filter;
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={isActive}
+      aria-label={`Filter: ${label} (${count})`}
+      onClick={() => onSelect(filter)}
+      className={`stat-filter stat-filter-${variant} ${isActive ? "active" : ""}`}
+    >
+      <BigStat
+        label={label}
+        title={String(count)}
+        size="lg"
+        state={variant === "muted" ? "muted" : "default"}
+        error={variant === "danger" && count > 0}
+      />
+    </button>
+  );
+}
+
 export default function Dashboard() {
   const state = useAsync(() => api.dashboard(), []);
+  const [filter, setFilter] = useState<Filter>("ALL");
 
   return (
     <>
@@ -110,24 +152,33 @@ export default function Dashboard() {
           const total = rows.length;
           const passRate = total > 0 ? ((passed / total) * 100).toFixed(0) : "—";
 
+          const filteredRows =
+            filter === "ALL" ? rows : rows.filter((r) => r.status === filter);
+
           return (
             <>
-              <div className="stat-grid">
-                <BigStat
+              <div className="stat-grid" role="radiogroup" aria-label="Filter rows by status">
+                <FilterStat
                   label="Total evaluations"
-                  title={String(total)}
-                  size="lg"
+                  count={total}
+                  filter="ALL"
+                  active={filter}
+                  onSelect={setFilter}
                 />
-                <BigStat
+                <FilterStat
                   label="Certified"
-                  title={String(passed)}
-                  size="lg"
+                  count={passed}
+                  filter="PASSED"
+                  active={filter}
+                  onSelect={setFilter}
                 />
-                <BigStat
+                <FilterStat
                   label="Failed"
-                  title={String(failed)}
-                  size="lg"
-                  error={failed > 0}
+                  count={failed}
+                  filter="FAILED"
+                  active={filter}
+                  onSelect={setFilter}
+                  variant="danger"
                 />
                 <BigStat
                   label="Pass rate"
@@ -135,11 +186,13 @@ export default function Dashboard() {
                   size="lg"
                   state={total > 0 ? "default" : "muted"}
                 />
-                <BigStat
+                <FilterStat
                   label="Pending"
-                  title={String(pending)}
-                  size="lg"
-                  state="muted"
+                  count={pending}
+                  filter="UNKNOWN"
+                  active={filter}
+                  onSelect={setFilter}
+                  variant="muted"
                 />
               </div>
 
@@ -159,10 +212,21 @@ export default function Dashboard() {
                       <code className="empty-code">python run_certification.py</code>
                     </div>
                   </div>
+                ) : filteredRows.length === 0 ? (
+                  <div className="empty">
+                    <Text color="muted" size="md">
+                      No rows match the {filterLabel(filter)} filter.
+                    </Text>
+                    <div style={{ marginTop: 8 }}>
+                      <Button type="secondary" onClick={() => setFilter("ALL")}>
+                        Show all
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
                   <Table
                     headers={headers}
-                    rows={rows.map(tableRow)}
+                    rows={filteredRows.map(tableRow)}
                     size="md"
                   />
                 )}
@@ -173,4 +237,17 @@ export default function Dashboard() {
       </AsyncView>
     </>
   );
+}
+
+function filterLabel(f: Filter): string {
+  switch (f) {
+    case "PASSED":
+      return "Certified";
+    case "FAILED":
+      return "Failed";
+    case "UNKNOWN":
+      return "Pending";
+    default:
+      return "current";
+  }
 }

@@ -34,6 +34,18 @@ import sys
 import urllib.request
 from datetime import datetime
 
+# OTel BatchSpanProcessor defaults backpressure when running long datasets
+# (150+ items) against a slow local Langfuse: queue saturates → silent freeze
+# near the tail. Bigger queue + smaller, more frequent batches keeps drain
+# ahead of fill. Override these env vars to disable. See README "Hangs on
+# long runs" for the diagnostic story.
+os.environ.setdefault("OTEL_BSP_MAX_QUEUE_SIZE", "20000")
+os.environ.setdefault("OTEL_BSP_SCHEDULE_DELAY", "2000")
+os.environ.setdefault("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "64")
+os.environ.setdefault("OTEL_BSP_EXPORT_TIMEOUT", "120000")
+os.environ.setdefault("LANGFUSE_FLUSH_AT", "64")
+os.environ.setdefault("LANGFUSE_FLUSH_INTERVAL", "2")
+
 try:
     from langfuse import get_client, Evaluation
     from langfuse.openai import OpenAI as LangfuseOpenAI
@@ -89,6 +101,15 @@ def parse_args():
                              "annotation queue for human review")
     parser.add_argument("--ci", action="store_true",
                         help="CI mode: exit with code 1 if certification fails")
+    parser.add_argument("--system-prompt-file", type=str, default=None,
+                        help="Path to a markdown file used verbatim as the LLM "
+                             "system message. Used to test domain-adapted "
+                             "variants like the finance-expert prompt.")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Variant slug appended to the model name in "
+                             "metadata + run name (e.g. 'finance-expert'). "
+                             "Each labeled variant becomes a distinct row on "
+                             "the certification dashboard.")
     return parser.parse_args()
 
 
@@ -104,24 +125,32 @@ def is_claude_native(model: str) -> bool:
     return model.startswith("claude") and anthropic is not None
 
 
-def call_anthropic_native(question: str, model: str) -> str:
+def call_anthropic_native(question: str, model: str, system: str = None) -> str:
     """Call Claude via native Anthropic SDK."""
     client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=model,
-        max_tokens=2048,
-        messages=[{"role": "user", "content": question}],
-    )
+    kwargs = {
+        "model": model,
+        "max_tokens": 2048,
+        "messages": [{"role": "user", "content": question}],
+    }
+    if system:
+        kwargs["system"] = system
+    response = client.messages.create(**kwargs)
     return response.content[0].text
 
 
-def call_openai_compatible(question: str, model: str, endpoint: str, api_key: str) -> str:
+def call_openai_compatible(question: str, model: str, endpoint: str, api_key: str,
+                           system: str = None) -> str:
     """Call any model via OpenAI-compatible API with Langfuse auto-tracing."""
     client = LangfuseOpenAI(base_url=endpoint, api_key=api_key)
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": question})
     response = client.chat.completions.create(
         model=model,
         max_tokens=2048,
-        messages=[{"role": "user", "content": question}],
+        messages=messages,
     )
     return response.choices[0].message.content
 
@@ -191,7 +220,8 @@ def _build_prompt(inp: dict) -> str:
     return question
 
 
-def create_certification_task(model: str, endpoint: str, api_key: str):
+def create_certification_task(model: str, endpoint: str, api_key: str,
+                              system: str = None):
     """Create a task function that calls the model under test.
 
     The task function is called once per dataset item. It sends the input
@@ -212,9 +242,10 @@ def create_certification_task(model: str, endpoint: str, api_key: str):
 
         # Route to appropriate LLM client
         if is_claude_native(model):
-            return call_anthropic_native(prompt, model)
+            return call_anthropic_native(prompt, model, system=system)
         else:
-            return call_openai_compatible(prompt, model, endpoint, api_key)
+            return call_openai_compatible(prompt, model, endpoint, api_key,
+                                          system=system)
 
     return task
 
@@ -401,26 +432,58 @@ def main():
     )
     print(f"  Evaluators:  {[e.__name__ if hasattr(e, '__name__') else str(e) for e in item_evaluators]}", file=sys.stderr)
 
-    # Generate run name
-    run_name = args.run_name or (
-        f"{args.model}-{args.dataset.split('/')[-1]}-"
-        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    )
+    # Load optional system prompt (for domain-adapted variants like
+    # finance-expert). Read once; both LLM paths reuse the same string.
+    system_prompt = None
+    if args.system_prompt_file:
+        with open(args.system_prompt_file, "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+        print(f"  System prompt: {args.system_prompt_file} "
+              f"({len(system_prompt)} chars)", file=sys.stderr)
+
+    # Compose the effective model identifier surfaced on the dashboard.
+    # When a --label is provided, the variant becomes its own row alongside
+    # the baseline (the portal groups by metadata.model).
+    label = (args.label or "").strip().strip("-") or None
+    effective_model = f"{args.model}-{label}" if label else args.model
+    prompt_variant = label or "baseline"
+
+    # Generate run name. Microsecond granularity guards against collisions
+    # when running the same model+dataset+label in parallel.
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    if args.run_name:
+        run_name = args.run_name
+    elif label:
+        run_name = (
+            f"{args.model}-{label}-{args.dataset.split('/')[-1]}-{timestamp}"
+        )
+    else:
+        run_name = f"{args.model}-{args.dataset.split('/')[-1]}-{timestamp}"
 
     # Run experiment
     print(f"\n  Run name: {run_name}", file=sys.stderr)
+    if label:
+        print(f"  Variant:  {label}  (dashboard model: {effective_model})",
+              file=sys.stderr)
     print(f"  Running experiment...\n", file=sys.stderr)
 
     result = dataset.run_experiment(
         name=args.dataset.split("/")[-1],
         run_name=run_name,
-        description=f"Model certification: {args.model} against {args.dataset}",
-        task=create_certification_task(args.model, args.endpoint, api_key),
+        description=(
+            f"Model certification: {effective_model} against {args.dataset}"
+        ),
+        task=create_certification_task(
+            args.model, args.endpoint, api_key, system=system_prompt
+        ),
         evaluators=item_evaluators,
         run_evaluators=run_evaluators,
         max_concurrency=args.max_concurrency,
         metadata={
-            "model": args.model,
+            "model": effective_model,
+            "base_model": args.model,
+            "prompt_variant": prompt_variant,
+            "system_prompt_file": args.system_prompt_file or "",
             "endpoint": args.endpoint,
             "dataset": args.dataset,
             "threshold": args.threshold,

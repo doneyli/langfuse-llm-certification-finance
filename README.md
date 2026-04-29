@@ -177,15 +177,59 @@ Runs a Langfuse dataset through a model, evaluates outputs, and reports pass/fai
 
 ```
 Options:
-  --dataset DATASET        Langfuse dataset name (required)
-  --model MODEL            Model to certify (default: claude-sonnet-4-6)
-  --endpoint URL           LLM API base URL (for custom gateways)
-  --threshold FLOAT        Pass threshold (default: 0.85)
-  --max-concurrency N      Concurrent API calls (default: 5)
-  --evaluators {all,...}   Which evaluators to run
-  --queue-failures         Route failed items to annotation queue for human review
-  --dry-run                Preview dataset items only
+  --dataset DATASET             Langfuse dataset name (required)
+  --model MODEL                 Model to certify (default: claude-sonnet-4-6)
+  --endpoint URL                LLM API base URL (for custom gateways)
+  --threshold FLOAT             Pass threshold (default: 0.85)
+  --max-concurrency N           Concurrent API calls (default: 5)
+  --evaluators {all,...}        Which evaluators to run
+  --queue-failures              Route failed items to annotation queue for human review
+  --dry-run                     Preview dataset items only
+  --system-prompt-file PATH     Markdown file used verbatim as the LLM system message
+                                (e.g. prompts/finance_expert.md — see "Domain-Adapted
+                                Variants" below)
+  --label NAME                  Variant slug appended to model name in metadata + run
+                                name (e.g. finance-expert). Each label becomes a
+                                distinct row on the certification dashboard.
 ```
+
+#### Domain-Adapted Variants
+
+The `--system-prompt-file` + `--label` pair lets you certify the **same model with a domain-specialized system prompt** and compare it side-by-side with the baseline on the dashboard. This is *not* fine-tuning — it's prompt engineering — but for many enterprise use cases the uplift is comparable.
+
+The repo ships one variant: **`prompts/finance_expert.md`** — a senior-financial-analyst system prompt with a 4-step CoT scaffold (identify metric → quote evidence → apply formula → state result) and FinanceBench-specific cautions (units, sign conventions, line-item confusion). On `financebench-sample` it lifts Opus 4.7 from 95% → 100%; on `financebench-v1` it's the difference between FAILED and PASSED for the same model.
+
+Run baseline and finance-expert variants of the same model:
+
+```bash
+# Baseline
+python run_certification.py --dataset certification/financebench-v1 --model claude-opus-4-7
+
+# Finance Expert variant
+python run_certification.py --dataset certification/financebench-v1 --model claude-opus-4-7 \
+    --system-prompt-file prompts/finance_expert.md --label finance-expert
+```
+
+The dashboard groups by `metadata.model`, so the two runs appear as `claude-opus-4-7` and `claude-opus-4-7-finance-expert` — distinct rows for the comparison.
+
+> **Future**: promote the system prompt into Langfuse prompt management (`setup_prompts.py`) once the variant graduates from demo to production tooling — gives you versioning + audit trail, matching the `financial-qa` / `financial-sentiment` pattern already in the codebase.
+
+#### Troubleshooting: hangs on long runs
+
+If a run silently freezes near the tail (e.g. progress to ~item 140 of 150, then stops emitting log lines for 10+ minutes with the Python process alive but consuming 0% CPU), the cause is OTel `BatchSpanProcessor` queue saturation against a slow local Langfuse — large spans (long evidence + long CoT outputs) accumulate faster than the local instance can ingest them, the export queue fills, and the pipeline deadlocks.
+
+`run_certification.py` now sets safer OTel defaults at startup (queue 20k, batch 64, flush every 2s, export timeout 120s). To override, set the env vars before running:
+
+```bash
+OTEL_BSP_MAX_QUEUE_SIZE=20000      # default queue is 2048 — too small for 150+ items
+OTEL_BSP_MAX_EXPORT_BATCH_SIZE=64  # smaller batches export faster, less queue pressure
+OTEL_BSP_SCHEDULE_DELAY=2000       # flush every 2s instead of every 5s
+OTEL_BSP_EXPORT_TIMEOUT=120000     # give a slow local Langfuse 2 minutes per export
+LANGFUSE_FLUSH_AT=64
+LANGFUSE_FLUSH_INTERVAL=2
+```
+
+The hang does not occur against Langfuse Cloud (faster ingestion). Only seen against a local self-hosted Langfuse with the full 150-item FinanceBench dataset and a CoT-heavy system prompt.
 
 ### `evaluators.py` - Financial Evaluators
 

@@ -477,6 +477,71 @@ code,
 .stat-grid > *:nth-child(5) { animation-delay: 0.18s; }
 .stat-grid > *:nth-child(6) { animation-delay: 0.22s; }
 
+/* ---------- Clickable filter stat cards ---------- */
+
+.stat-filter {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  border-radius: 12px;
+  position: relative;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stat-filter > * {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stat-filter:hover > * {
+  border-color: var(--text-default) !important;
+}
+
+.stat-filter:hover {
+  transform: translateY(-1px);
+}
+
+.stat-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.stat-filter.active > * {
+  border-color: var(--text-default) !important;
+  box-shadow: 0 0 0 2px var(--text-default);
+}
+
+.stat-filter-danger.active > * {
+  border-color: var(--fail-bar-a) !important;
+  box-shadow: 0 0 0 2px var(--fail-bar-a);
+}
+
+.stat-filter::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  width: 0;
+  height: 2px;
+  background: var(--text-default);
+  border-radius: 2px;
+  transform: translateX(-50%);
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stat-filter.active::after {
+  width: 28px;
+}
+
+.stat-filter-danger.active::after {
+  background: var(--fail-bar-a);
+}
+
 .section {
   margin-bottom: 28px;
   animation: fadeUp 0.5s ease both;

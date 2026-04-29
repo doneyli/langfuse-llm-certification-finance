@@ -312,26 +312,23 @@ class PortalClient:
             trace_id = ri.get("traceId", "")
             item_scores = {}
 
-            # Get all scores for this trace (paginated — a trace can have many)
-            try:
-                trace_scores = self._paginate(
-                    f"/api/public/scores?traceId={trace_id}"
-                )
-                for s in trace_scores:
-                    sname = s["name"]
-                    if sname in RUN_LEVEL_SCORES:
-                        continue
-                    sval = s.get("value")
-                    item_scores[sname] = {
-                        "value": sval,
-                        "comment": s.get("comment", ""),
-                    }
-                    if sname not in score_totals:
-                        score_totals[sname] = []
-                    if sval is not None:
-                        score_totals[sname].append(sval)
-            except Exception:
-                pass
+            # Read scores embedded in the trace itself.
+            # (NOTE: /api/public/scores?traceId=... silently ignores the filter
+            # and returns scores from every trace, so we cannot use it here.)
+            trace = self._get_trace(trace_id) if trace_id else None
+            for s in (trace or {}).get("scores", []) or []:
+                sname = s.get("name")
+                if not sname or sname in RUN_LEVEL_SCORES:
+                    continue
+                sval = s.get("value")
+                item_scores[sname] = {
+                    "value": sval,
+                    "comment": s.get("comment", ""),
+                }
+                if sname not in score_totals:
+                    score_totals[sname] = []
+                if sval is not None:
+                    score_totals[sname].append(sval)
 
             # Get dataset item input/expected
             ds_item_id = ri.get("datasetItemId", "")
