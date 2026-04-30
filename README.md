@@ -44,8 +44,8 @@ Automated LLM model certification pipeline using [Langfuse](https://langfuse.com
 ### 1. Setup
 
 ```bash
-git clone https://github.com/doneyli/clickhouse-llm-evals-finance.git
-cd clickhouse-llm-evals-finance
+git clone https://github.com/doneyli/langfuse-llm-certification-finance.git
+cd langfuse-llm-certification-finance
 cp .env.example .env    # Edit with your Langfuse + LLM API credentials
 pip install -r requirements.txt
 ```
