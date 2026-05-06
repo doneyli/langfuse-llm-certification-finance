@@ -37,6 +37,7 @@ Automated LLM model certification pipeline using [Langfuse](https://langfuse.com
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
+- Node.js 20+ / npm 10+ (to build the certification portal frontend)
 - A [Langfuse](https://cloud.langfuse.com) instance (Cloud free tier or self-hosted)
 - An LLM API key (OpenAI, Anthropic, or any OpenAI-compatible endpoint)
 
@@ -85,21 +86,27 @@ uv run python run_certification.py --dataset certification/financebench-sample \
   --model claude-sonnet-4-6 --queue-failures
 ```
 
-### 5. Launch the Portal
+### 5. Build the Portal Frontend
+
+```bash
+cd portal/frontend && npm install && npm run build && cd ../..
+```
+
+### 6. Launch the Portal
 
 ```bash
 uv run python -m portal.app    # Opens on http://localhost:8050
 ```
 
-### 6. View Results
+### 7. View Results
 
 Open `http://localhost:8050` for the Certification Dashboard, or Langfuse UI > **Datasets** > `certification/financebench-sample` > **Runs**
 
-### 6. Review Failed Items
+### 8. Review Failed Items
 
 Open your Langfuse UI > **Annotation Queues** > `Certification Review` to review items that failed automated evaluation.
 
-### 7. Export Report
+### 9. Export Report
 
 ```bash
 uv run python export_results.py --dataset certification/financebench-sample
