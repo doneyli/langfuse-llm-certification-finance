@@ -20,6 +20,9 @@ on:
       - 'evaluators.py'
       - 'run_certification.py'
       - 'setup_prompts.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.python-version'
       - '.env.example'
 
 env:
@@ -35,21 +38,16 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          python-version: '3.11'
+          persist-credentials: false
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install anthropic
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Run FinanceBench certification
         run: |
-          python run_certification.py \
+          uv run python run_certification.py \
             --dataset certification/financebench-sample \
             --model ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }} \
             --threshold ${{ github.event.inputs.threshold || '0.85' }} \
@@ -61,21 +59,16 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          python-version: '3.11'
+          persist-credentials: false
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install anthropic
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Run FPB sentiment certification
         run: |
-          python run_certification.py \
+          uv run python run_certification.py \
             --dataset certification/fpb-sample \
             --model ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }} \
             --threshold ${{ github.event.inputs.threshold || '0.85' }} \
@@ -89,20 +82,15 @@ jobs:
     if: always()
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          python-version: '3.11'
+          persist-credentials: false
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install anthropic pytest
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Run certification tests
         env:
           CERT_MODEL: ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }}
           CERT_THRESHOLD: ${{ github.event.inputs.threshold || '0.85' }}
-        run: pytest tests/test_certification.py -v --tb=short
+        run: uv run pytest tests/test_certification.py -v --tb=short

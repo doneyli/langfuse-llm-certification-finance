@@ -35,7 +35,8 @@ Automated LLM model certification pipeline using [Langfuse](https://langfuse.com
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - A [Langfuse](https://cloud.langfuse.com) instance (Cloud free tier or self-hosted)
 - An LLM API key (OpenAI, Anthropic, or any OpenAI-compatible endpoint)
 
@@ -47,34 +48,47 @@ Automated LLM model certification pipeline using [Langfuse](https://langfuse.com
 git clone https://github.com/doneyli/langfuse-llm-certification-finance.git
 cd langfuse-llm-certification-finance
 cp .env.example .env    # Edit with your Langfuse + LLM API credentials
+```
+
+**Install dependencies** (choose one):
+
+```bash
+# Recommended: using uv (https://docs.astral.sh/uv/)
+uv sync
+
+# Alternative: using pip
 pip install -r requirements.txt
 ```
+
+> The examples below use `uv run` which auto-creates a virtualenv and installs
+> dependencies. If you installed with pip, drop the `uv run` prefix and use
+> `python` directly.
 
 ### 2. Load Sample Dataset (offline, no HuggingFace needed)
 
 ```bash
-python setup_datasets.py --dataset financebench --sample
+uv run python setup_datasets.py --dataset financebench --sample
 ```
 
 ### 3. Set Up Langfuse Configuration
 
 ```bash
-python setup_score_configs.py        # Register score types in Langfuse
-python setup_annotation_queues.py    # Create human review queue
-python setup_prompts.py              # Register prompt templates
+uv run python setup_score_configs.py        # Register score types in Langfuse
+uv run python setup_annotation_queues.py    # Create human review queue
+uv run python setup_prompts.py              # Register prompt templates
 ```
 
 ### 4. Run Certification
 
 ```bash
-python run_certification.py --dataset certification/financebench-sample \
+uv run python run_certification.py --dataset certification/financebench-sample \
   --model claude-sonnet-4-6 --queue-failures
 ```
 
 ### 5. Launch the Portal
 
 ```bash
-python -m portal.app    # Opens on http://localhost:8050
+uv run python -m portal.app    # Opens on http://localhost:8050
 ```
 
 ### 6. View Results
@@ -88,8 +102,8 @@ Open your Langfuse UI > **Annotation Queues** > `Certification Review` to review
 ### 7. Export Report
 
 ```bash
-python export_results.py --dataset certification/financebench-sample
-python export_results.py --dataset certification/financebench-sample --format json --output report.json
+uv run python export_results.py --dataset certification/financebench-sample
+uv run python export_results.py --dataset certification/financebench-sample --format json --output report.json
 ```
 
 ## Full Dataset Mode
@@ -97,8 +111,8 @@ python export_results.py --dataset certification/financebench-sample --format js
 To load all 150 FinanceBench items from HuggingFace (requires internet):
 
 ```bash
-python setup_datasets.py --dataset financebench        # Downloads from HuggingFace
-python run_certification.py --dataset certification/financebench-v1 --model gpt-4o
+uv run python setup_datasets.py --dataset financebench        # Downloads from HuggingFace
+uv run python run_certification.py --dataset certification/financebench-v1 --model gpt-4o
 ```
 
 ## Components
@@ -203,10 +217,10 @@ Run baseline and finance-expert variants of the same model:
 
 ```bash
 # Baseline
-python run_certification.py --dataset certification/financebench-v1 --model claude-opus-4-7
+uv run python run_certification.py --dataset certification/financebench-v1 --model claude-opus-4-7
 
 # Finance Expert variant
-python run_certification.py --dataset certification/financebench-v1 --model claude-opus-4-7 \
+uv run python run_certification.py --dataset certification/financebench-v1 --model claude-opus-4-7 \
     --system-prompt-file prompts/finance_expert.md --label finance-expert
 ```
 
@@ -319,7 +333,7 @@ Then import it in `run_certification.py`.
 ### Changing Pass Thresholds
 
 ```bash
-python run_certification.py --dataset my-dataset --threshold 0.90
+uv run python run_certification.py --dataset my-dataset --threshold 0.90
 ```
 
 Or modify `DEFAULT_THRESHOLD` in `evaluators.py`.
@@ -332,7 +346,7 @@ export LLM_BASE_URL="https://your-gateway.internal/v1"
 export LLM_API_KEY="your-key"
 
 # Or via CLI flag
-python run_certification.py --endpoint https://your-gateway.internal/v1 --dataset ...
+uv run python run_certification.py --endpoint https://your-gateway.internal/v1 --dataset ...
 ```
 
 ## Prompt Management
@@ -342,7 +356,7 @@ Certification prompts are managed in Langfuse rather than hardcoded. This enable
 ### Setup
 
 ```bash
-python setup_prompts.py    # Creates financial-qa and financial-sentiment prompts
+uv run python setup_prompts.py    # Creates financial-qa and financial-sentiment prompts
 ```
 
 ### Updating Prompts
@@ -362,8 +376,8 @@ The pipeline supports human-in-the-loop review for compliance sign-off and evalu
 ### Setup
 
 ```bash
-python setup_score_configs.py        # Creates human_accuracy and human_groundedness score configs
-python setup_annotation_queues.py    # Creates "Certification Review" queue
+uv run python setup_score_configs.py        # Creates human_accuracy and human_groundedness score configs
+uv run python setup_annotation_queues.py    # Creates "Certification Review" queue
 ```
 
 ### Routing Failed Items
@@ -371,7 +385,7 @@ python setup_annotation_queues.py    # Creates "Certification Review" queue
 Pass `--queue-failures` to automatically route low-scoring items to the annotation queue:
 
 ```bash
-python run_certification.py --dataset certification/financebench-sample \
+uv run python run_certification.py --dataset certification/financebench-sample \
   --model claude-haiku-4-5-20251001 --queue-failures
 ```
 
@@ -400,10 +414,10 @@ Run on a cron schedule to catch issues in real-time:
 
 ```bash
 # Every 15 minutes, check the last hour of production traces
-*/15 * * * * cd /path/to/repo && python monitor_production.py --hours 1 --tags production
+*/15 * * * * cd /path/to/repo && uv run python monitor_production.py --hours 1 --tags production
 
 # Or filter by your application's trace name
-*/15 * * * * cd /path/to/repo && python monitor_production.py --trace-name my-finance-app
+*/15 * * * * cd /path/to/repo && uv run python monitor_production.py --trace-name my-finance-app
 ```
 
 ### How It Works
@@ -433,7 +447,7 @@ See [Langfuse LLM-as-a-Judge docs](https://langfuse.com/docs/evaluation/evaluati
 Use `--ci` to fail the process on certification failure (exit code 1):
 
 ```bash
-python run_certification.py \
+uv run python run_certification.py \
   --dataset certification/financebench-sample \
   --model claude-haiku-4-5-20251001 \
   --threshold 0.85 \
@@ -446,13 +460,13 @@ python run_certification.py \
 
 ```bash
 # Run all certification tests
-pytest tests/test_certification.py -v
+uv run pytest tests/test_certification.py -v
 
 # Run only FinanceBench tests
-pytest tests/test_certification.py -v -k financebench
+uv run pytest tests/test_certification.py -v -k financebench
 
 # Override model and threshold via env vars
-CERT_MODEL=claude-sonnet-4-6 CERT_THRESHOLD=0.90 pytest tests/test_certification.py -v
+CERT_MODEL=claude-sonnet-4-6 CERT_THRESHOLD=0.90 uv run pytest tests/test_certification.py -v
 ```
 
 Tests cover:
@@ -494,15 +508,15 @@ The UI is a React SPA built with [Click UI](https://clickhouse.design/click-ui),
 # First time: build the frontend
 cd portal/frontend && npm install && npm run build && cd ../..
 
-python -m portal.app                     # Default: http://localhost:8050
-PORTAL_PORT=9000 python -m portal.app    # Custom port
+uv run python -m portal.app                     # Default: http://localhost:8050
+PORTAL_PORT=9000 uv run python -m portal.app    # Custom port
 ```
 
 ### Frontend development (live reload)
 
 ```bash
 # Terminal 1: API
-python -m portal.app
+uv run python -m portal.app
 
 # Terminal 2: Vite dev server — proxies /api to :8050
 cd portal/frontend && npm run dev        # http://localhost:5173
@@ -589,7 +603,7 @@ Without the LLM judge, you'd just see "60%, FAILED" and assume the model is unre
 Yes. Set the `JUDGE_MODEL` environment variable:
 
 ```bash
-JUDGE_MODEL=claude-haiku-4-5-20251001 python run_certification.py --dataset ...
+JUDGE_MODEL=claude-haiku-4-5-20251001 uv run python run_certification.py --dataset ...
 ```
 
 Using a cheaper/faster judge model reduces cost but may lower evaluation quality. We recommend using a model at least as capable as `claude-sonnet-4-6` for financial evaluations.

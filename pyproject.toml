@@ -1,0 +1,23 @@
+[project]
+name = "langfuse-llm-certification-finance"
+version = "0.1.0"
+description = "Automated LLM certification pipeline for financial services using Langfuse"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "langfuse>=3.0,<4.0",
+    "openai>=1.0",
+    "python-dotenv>=1.0",
+    "datasets>=2.0",
+    "anthropic>=0.39",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jinja2>=3.1",
+    "cachetools>=5.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+]
