@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Automated LLM certification pipeline for financial services using Langfuse"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "langfuse>=3.0,<4.0",
     "openai>=1.0",
