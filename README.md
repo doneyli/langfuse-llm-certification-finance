@@ -36,6 +36,7 @@ Automated LLM model certification pipeline using [Langfuse](https://langfuse.com
 ## Prerequisites
 
 - Python 3.10+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - A [Langfuse](https://cloud.langfuse.com) instance (Cloud free tier or self-hosted)
 - An LLM API key (OpenAI, Anthropic, or any OpenAI-compatible endpoint)
 
@@ -47,8 +48,21 @@ Automated LLM model certification pipeline using [Langfuse](https://langfuse.com
 git clone https://github.com/doneyli/langfuse-llm-certification-finance.git
 cd langfuse-llm-certification-finance
 cp .env.example .env    # Edit with your Langfuse + LLM API credentials
+```
+
+**Install dependencies** (choose one):
+
+```bash
+# Recommended: using uv (https://docs.astral.sh/uv/)
+uv sync
+
+# Alternative: using pip
 pip install -r requirements.txt
 ```
+
+> If you installed with `uv sync`, prefix commands with `uv run`
+> (e.g., `uv run python run_certification.py ...`).
+> With pip, use `python` directly as shown in the examples below.
 
 ### 2. Load Sample Dataset (offline, no HuggingFace needed)
 
