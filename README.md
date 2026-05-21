@@ -38,8 +38,64 @@ Automated LLM model certification pipeline using [Langfuse](https://langfuse.com
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - Node.js 20+ / npm 10+ (to build the certification portal frontend)
-- A [Langfuse](https://cloud.langfuse.com) instance (Cloud free tier or self-hosted)
+- A Langfuse instance — see [Choose your Langfuse deployment](#choose-your-langfuse-deployment) below
 - An LLM API key (OpenAI, Anthropic, or any OpenAI-compatible endpoint)
+- Docker 24+ with Compose v2 — only if you self-host Langfuse
+
+## Choose your Langfuse deployment
+
+The pipeline talks to Langfuse purely through `LANGFUSE_PUBLIC_KEY`,
+`LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL`, so the same code runs against
+either deployment. Pick one before running Quick Start.
+
+| | Langfuse Cloud (recommended) | Self-hosted (OSS) |
+|---|---|---|
+| Best for | Fastest evaluation, no infra to manage | Air-gapped environments, strict data-residency requirements |
+| Setup time | ~2 min (signup) | ~10 min (Docker Compose) |
+| Cost | Free tier with paid plans above (see [pricing](https://langfuse.com/pricing)) | Infrastructure only — Langfuse OSS is Apache 2.0 |
+| Data residency | Langfuse-managed (EU or US region) | Your infrastructure |
+| Maintenance | None | You operate Postgres, ClickHouse, Redis, MinIO |
+| Prerequisite for this repo | A Cloud account | Docker 24+ with Compose v2 |
+
+### Option A — Langfuse Cloud
+
+1. Sign up at <https://cloud.langfuse.com/auth/sign-up> (EU) or
+   <https://us.cloud.langfuse.com/auth/sign-up> (US).
+2. Create an **Organization → Project**.
+3. **Settings → API Keys → Create new API keys**. Copy the public + secret keys.
+4. Paste them into `.env` (created in [Quick Start step 1](#1-setup)). The
+   `LANGFUSE_BASE_URL` already defaults to `https://cloud.langfuse.com`;
+   uncomment the US-region line in `.env.example` if you signed up there.
+
+### Option B — Self-host Langfuse
+
+The repo ships a curated Docker Compose stack with Langfuse pinned to v3. From
+the repo root:
+
+```bash
+docker compose -f selfhost/docker-compose.yml up -d
+# Open http://localhost:3000 → sign up → create Organization + Project →
+# Settings → API Keys → Create new API keys
+```
+
+Then in [Quick Start step 1](#1-setup), uncomment the self-hosted line in
+`.env.example` (and comment the Cloud default) so `.env` ends up with:
+
+```bash
+LANGFUSE_BASE_URL=http://localhost:3000
+```
+
+See [`selfhost/README.md`](selfhost/README.md) for stop/reset commands,
+network-exposure guidance, credential rotation, and pointers to production
+self-hosting via Kubernetes. If you plan to run the full 150-item FinanceBench
+dataset against a local stack, also read
+[Troubleshooting: hangs on long runs](#troubleshooting-hangs-on-long-runs) —
+local Langfuse can saturate the OTel queue on long, CoT-heavy runs.
+
+> **Recommendation:** start with Cloud's free tier to get the pipeline running
+> end-to-end, then move to self-hosted if compliance or data-residency
+> requirements demand it. The certification scripts, evaluators, dataset
+> loaders, portal, and CI workflow are identical for both deployments.
 
 ## Quick Start
 
@@ -50,6 +106,11 @@ git clone https://github.com/doneyli/langfuse-llm-certification-finance.git
 cd langfuse-llm-certification-finance
 cp .env.example .env    # Edit with your Langfuse + LLM API credentials
 ```
+
+> The `.env.example` lists three `LANGFUSE_BASE_URL` options (Cloud EU, Cloud
+> US, self-hosted) — uncomment exactly one and comment the others before
+> running anything. See
+> [Choose your Langfuse deployment](#choose-your-langfuse-deployment).
 
 **Install dependencies** (choose one):
 
@@ -489,6 +550,8 @@ Tests cover:
 - **Jobs:** runs FinanceBench and FPB certification in parallel, then runs the pytest gate
 - **Secrets required:** `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `ANTHROPIC_API_KEY`
 
+The workflow is deployment-agnostic — point `LANGFUSE_BASE_URL` at Cloud or at a self-hosted Langfuse reachable from GitHub Actions runners (e.g. a publicly-resolvable hostname, a VPN/tunnel, or a self-hosted runner inside your network).
+
 To trigger manually: **Actions** > **LLM Certification** > **Run workflow** > choose model and threshold.
 
 ## Expanding to More Financial Datasets
@@ -575,7 +638,7 @@ Some metrics can also be visualized using [Langfuse Custom Dashboards](https://l
 |----------|----------|---------|-------------|
 | `LANGFUSE_PUBLIC_KEY` | Yes | — | Langfuse project public key |
 | `LANGFUSE_SECRET_KEY` | Yes | — | Langfuse project secret key |
-| `LANGFUSE_BASE_URL` | No | `https://cloud.langfuse.com` | Langfuse instance URL |
+| `LANGFUSE_BASE_URL` | No | `https://cloud.langfuse.com` | Langfuse instance URL — Cloud (EU/US) or self-hosted (typically `http://localhost:3000`). See [Choose your Langfuse deployment](#choose-your-langfuse-deployment). |
 | `ANTHROPIC_API_KEY` | For Claude models | — | Anthropic API key for Claude models |
 | `LLM_API_KEY` | For OpenAI models | — | OpenAI-compatible API key |
 | `LLM_BASE_URL` | No | `https://api.openai.com/v1` | LLM API base URL |
