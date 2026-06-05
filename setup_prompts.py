@@ -65,6 +65,111 @@ PROMPTS = [
             "variables": ["text"],
         },
     },
+
+    # ---------------------------------------------------------------------
+    # Use-case (agent) certification prompts. Each agent step fetches its
+    # production-labelled template via cert_common.get_managed_prompt(), so the
+    # multi-step agents share the same edit/version/promote lifecycle as the
+    # model-cert prompts above. Agents land in issues #9 (10k-analyst),
+    # #10 (sentiment-triage), #11 (advisory-draft); these templates are
+    # registered by the foundation so prompt management is wired before the
+    # agents run. See docs/usecase-certification.md.
+    # ---------------------------------------------------------------------
+    {
+        "name": "usecase-10k-analyst-plan",
+        "type": "text",
+        "prompt": (
+            "You are a financial analyst planning how to answer a question about "
+            "an SEC filing. The question's reasoning type is: {{qtype}}.\n\n"
+            "List the exact line items you need from the filing. If the answer "
+            "requires arithmetic (a ratio, a year-over-year change, an average), "
+            "emit a single line starting with 'CALCULATE:' followed by the formula "
+            "in words. If it is pure extraction, do not emit CALCULATE.\n\n"
+            "--- Question ---\n{{question}}"
+        ),
+        "labels": ["production"],
+        "tags": ["certification", "use-case", "10k-analyst"],
+        "config": {
+            "description": "10-K Analyst agent — PLAN step. Classifies the question "
+                           "and decides whether the calculator tool is needed (#9).",
+            "variables": ["question", "qtype"],
+        },
+    },
+    {
+        "name": "usecase-10k-analyst-compose",
+        "type": "text",
+        "prompt": (
+            "You are a financial analyst writing the final answer. Use ONLY the "
+            "operands and computed value provided; never invent numbers. Cite the "
+            "line items the answer rests on.\n\n"
+            "--- Question ---\n{{question}}\n\n"
+            "--- Operands extracted from the filing ---\n{{operands}}\n\n"
+            "--- Computed value (from the calculator tool, if any) ---\n{{computed}}\n\n"
+            "--- Citations ---\n{{citations}}\n\n"
+            "Write a precise, grounded answer."
+        ),
+        "labels": ["production"],
+        "tags": ["certification", "use-case", "10k-analyst"],
+        "config": {
+            "description": "10-K Analyst agent — COMPOSE step. Grounded answer with "
+                           "citations, no invented numbers (#9).",
+            "variables": ["question", "operands", "computed", "citations"],
+        },
+    },
+    {
+        "name": "usecase-sentiment-classify",
+        "type": "text",
+        "prompt": (
+            "You are a market-news analyst on a trading desk. Classify the sentiment "
+            "of the financial text as exactly one of: positive, negative, neutral. "
+            "Then give your confidence as a number between 0 and 1.\n\n"
+            "Text: {{text}}\n\n"
+            "Respond on one line as: <label> | <confidence>"
+        ),
+        "labels": ["production"],
+        "tags": ["certification", "use-case", "sentiment-triage"],
+        "config": {
+            "description": "Sentiment Triage agent — CLASSIFY step. Label + confidence "
+                           "for the routing tool (#10).",
+            "variables": ["text"],
+        },
+    },
+    {
+        "name": "usecase-advisory-analyze",
+        "type": "text",
+        "prompt": (
+            "You are a financial analyst preparing a client briefing. From the "
+            "filing excerpts below, extract only the facts relevant to the question. "
+            "Be precise with numbers and attribute each fact to its line item.\n\n"
+            "--- Question ---\n{{question}}\n\n"
+            "--- Filing excerpts ---\n{{evidence}}"
+        ),
+        "labels": ["production"],
+        "tags": ["certification", "use-case", "advisory-draft"],
+        "config": {
+            "description": "Advisory Drafting agent — ANALYZE step. Pulls grounded "
+                           "facts from the filing (#11).",
+            "variables": ["question", "evidence"],
+        },
+    },
+    {
+        "name": "usecase-advisory-draft",
+        "type": "text",
+        "prompt": (
+            "You are writing a short, client-facing summary based ONLY on the facts "
+            "below. Use plain, compliant language. Do NOT make performance promises "
+            "or use phrases like 'guaranteed returns', 'risk-free', or 'can't lose'. "
+            "Do not give investment advice to buy or sell.\n\n"
+            "--- Facts ---\n{{facts}}"
+        ),
+        "labels": ["production"],
+        "tags": ["certification", "use-case", "advisory-draft"],
+        "config": {
+            "description": "Advisory Drafting agent — DRAFT step. Client-facing prose; "
+                           "the compliance self-check tool scans the output (#11).",
+            "variables": ["facts"],
+        },
+    },
 ]
 
 

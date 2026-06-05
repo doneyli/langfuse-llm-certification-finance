@@ -78,6 +78,17 @@ SCORE_CONFIGS = [
                        "completeness (30%) relative to source filing evidence. "
                        "Only scored for items with evidence documents.",
     },
+    # Trajectory evaluator (use-case / agent certification)
+    {
+        "name": "tool_use_correctness",
+        "dataType": "NUMERIC",
+        "minValue": 0,
+        "maxValue": 1,
+        "description": "Use-case certification: whether the agent's trajectory matched "
+                       "the question type (e.g. used the calculator tool for "
+                       "numerical-reasoning questions). 1.0 = correct path, 0.0 = "
+                       "required tool not invoked.",
+    },
     # Run-level evaluators (aggregated)
     {
         "name": "avg_numerical_accuracy",
@@ -99,6 +110,30 @@ SCORE_CONFIGS = [
         "minValue": 0,
         "maxValue": 1,
         "description": "Average groundedness across all items with source evidence.",
+    },
+    {
+        "name": "avg_regulatory_compliance",
+        "dataType": "NUMERIC",
+        "minValue": 0,
+        "maxValue": 1,
+        "description": "Average regulatory_compliance across all items in the run "
+                       "(use-case certification gate dimension).",
+    },
+    {
+        "name": "avg_completeness",
+        "dataType": "NUMERIC",
+        "minValue": 0,
+        "maxValue": 1,
+        "description": "Average completeness across all items in the run "
+                       "(use-case certification gate dimension).",
+    },
+    {
+        "name": "avg_tool_use_correctness",
+        "dataType": "NUMERIC",
+        "minValue": 0,
+        "maxValue": 1,
+        "description": "Average tool_use_correctness across all agent items in the run "
+                       "(use-case certification gate dimension).",
     },
     {
         "name": "certification_result",

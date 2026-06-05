@@ -27,11 +27,8 @@ Prerequisites:
 """
 
 import argparse
-import base64
-import json
 import os
 import sys
-import urllib.request
 from datetime import datetime
 
 # OTel BatchSpanProcessor defaults backpressure when running long datasets
@@ -69,6 +66,7 @@ from evaluators import (
     average_score_evaluator,
     certification_gate,
 )
+from cert_common import persist_run_evaluations, queue_failed_items
 
 
 # --------------- CLI ---------------
@@ -295,85 +293,24 @@ def select_evaluators(evaluator_mode: str, dataset_name: str, threshold: float):
 
 # --------------- Annotation Queue Routing ---------------
 
-REVIEW_QUEUE_NAME = "Certification Review"
-
 
 def _queue_failed_items(item_results, primary_score):
     """Route low-scoring traces to the annotation queue for human review.
 
     An item is queued if its primary accuracy score is 0 or its groundedness
     score is below 0.5. Requires the 'Certification Review' annotation queue
-    to exist (created by setup_annotation_queues.py).
+    to exist (created by setup_annotation_queues.py). Delegates the REST plumbing
+    to cert_common.queue_failed_items.
     """
-    lf_host = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
-    lf_pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-    lf_sk = os.getenv("LANGFUSE_SECRET_KEY", "")
-    lf_auth = base64.b64encode(f"{lf_pk}:{lf_sk}".encode()).decode()
-    headers = {
-        "Authorization": f"Basic {lf_auth}",
-        "Content-Type": "application/json",
-    }
-
-    # Find the queue ID
-    try:
-        req = urllib.request.Request(
-            f"{lf_host}/api/public/annotation-queues?limit=100",
-            headers=headers,
-        )
-        resp = urllib.request.urlopen(req)
-        queues = json.loads(resp.read()).get("data", [])
-        queue_id = None
-        for q in queues:
-            if q["name"] == REVIEW_QUEUE_NAME:
-                queue_id = q["id"]
-                break
-        if not queue_id:
-            print(f"  Warning: annotation queue '{REVIEW_QUEUE_NAME}' not found. "
-                  f"Run setup_annotation_queues.py first.", file=sys.stderr)
-            return
-    except Exception as e:
-        print(f"  Warning: could not list annotation queues: {e}", file=sys.stderr)
-        return
-
-    # Identify failed items
-    queued = 0
-    for ir in item_results:
-        if not hasattr(ir, "trace_id") or not ir.trace_id:
-            continue
-
-        should_queue = False
-        for ev in ir.evaluations:
+    def should_queue(evaluations):
+        for ev in evaluations:
             if primary_score and ev.name == primary_score and ev.value == 0.0:
-                should_queue = True
-                break
+                return True
             if ev.name == "groundedness" and ev.value is not None and ev.value < 0.5:
-                should_queue = True
-                break
+                return True
+        return False
 
-        if not should_queue:
-            continue
-
-        try:
-            body = json.dumps({
-                "objectId": ir.trace_id,
-                "objectType": "TRACE",
-                "status": "PENDING",
-            }).encode()
-            req = urllib.request.Request(
-                f"{lf_host}/api/public/annotation-queues/{queue_id}/items",
-                data=body,
-                headers=headers,
-                method="POST",
-            )
-            urllib.request.urlopen(req)
-            queued += 1
-        except Exception as e:
-            print(f"  Warning: failed to queue trace {ir.trace_id[:12]}...: {e}",
-                  file=sys.stderr)
-
-    if queued:
-        print(f"\n  Queued {queued} items for human review in '{REVIEW_QUEUE_NAME}'",
-              file=sys.stderr)
+    queue_failed_items(item_results, should_queue)
 
 
 # --------------- Main ---------------
@@ -496,46 +433,9 @@ def main():
     print("Results:", file=sys.stderr)
     print(result.format(), file=sys.stderr)
 
-    # Persist run-level evaluations to Langfuse.
-    # The Langfuse SDK computes run_evaluators locally but does not store them.
-    # We post scores via the REST API, attaching them to the first experiment
-    # trace so they appear in the Langfuse UI under that trace's scores.
-    if result.run_evaluations and result.item_results:
-        first_trace_id = None
-        for ir in result.item_results:
-            if hasattr(ir, "trace_id") and ir.trace_id:
-                first_trace_id = ir.trace_id
-                break
-
-        if first_trace_id:
-            lf_host = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
-            lf_pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-            lf_sk = os.getenv("LANGFUSE_SECRET_KEY", "")
-            lf_auth = base64.b64encode(f"{lf_pk}:{lf_sk}".encode()).decode()
-
-            for ev in result.run_evaluations:
-                if ev.value is not None:
-                    try:
-                        body = json.dumps({
-                            "traceId": first_trace_id,
-                            "name": ev.name,
-                            "value": ev.value,
-                            "comment": ev.comment or "",
-                            "dataType": "NUMERIC",
-                        }).encode()
-                        req = urllib.request.Request(
-                            f"{lf_host}/api/public/scores",
-                            data=body,
-                            headers={
-                                "Authorization": f"Basic {lf_auth}",
-                                "Content-Type": "application/json",
-                            },
-                            method="POST",
-                        )
-                        urllib.request.urlopen(req)
-                    except Exception as e:
-                        print(f"  Warning: failed to persist {ev.name}: {e}",
-                              file=sys.stderr)
+    # Persist run-level evaluations to Langfuse (scores on the first experiment
+    # trace). The SDK computes run_evaluators locally but does not store them.
+    persist_run_evaluations(result)
 
     # Print certification summary
     print("\n" + "=" * 50, file=sys.stderr)

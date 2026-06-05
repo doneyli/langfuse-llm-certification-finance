@@ -77,6 +77,19 @@ PROHIBITED_PHRASES = [
 
 # --------------- Helpers ---------------
 
+def _answer_text(output):
+    """Normalize an evaluator's ``output`` to the answer string.
+
+    Model certification passes a bare string. Use-case (agent) certification
+    passes the AgentResult dict ``{"answer": ..., "trajectory": {...}}``. This
+    guard lets every item-level evaluator accept either shape, so the existing
+    model-cert path is unchanged while the agent path reuses the same evaluators.
+    """
+    if isinstance(output, dict):
+        return output.get("answer", "")
+    return output
+
+
 def _extract_numbers(text: str) -> list[float]:
     """Extract numerical values from text, handling currency, commas, and percentages.
 
@@ -133,6 +146,7 @@ def _numbers_match(expected: list[float], actual: list[float],
 
 def exact_match_evaluator(*, output, expected_output, **kwargs):
     """Check if the expected answer string appears in the model output."""
+    output = _answer_text(output)
     if not output or not expected_output:
         return Evaluation(name="exact_match", value=0.0, comment="Missing output or expected_output")
 
@@ -156,6 +170,7 @@ def numerical_accuracy_evaluator(*, output, expected_output, **kwargs):
 
     This is the primary evaluator for FinanceBench-style financial QA.
     """
+    output = _answer_text(output)
     if not output or not expected_output:
         return Evaluation(name="numerical_accuracy", value=0.0,
                           comment="Missing output or expected_output")
@@ -191,6 +206,7 @@ def sentiment_evaluator(*, output, expected_output, **kwargs):
 
     For Financial PhraseBank (FPB) dataset items.
     """
+    output = _answer_text(output)
     if not output or not expected_output:
         return Evaluation(name="sentiment_accuracy", value=0.0,
                           comment="Missing output or expected_output")
@@ -233,6 +249,7 @@ def regulatory_compliance_evaluator(*, output, **kwargs):
 
     Returns 1.0 if clean, 0.0 if violations found.
     """
+    output = _answer_text(output)
     if not output:
         return Evaluation(name="regulatory_compliance", value=1.0,
                           comment="No output to check")
@@ -256,6 +273,7 @@ def response_completeness_evaluator(*, output, **kwargs):
 
     Ported from clickhouse-llm-observability/scripts/run-experiments.py.
     """
+    output = _answer_text(output)
     if not output:
         return Evaluation(name="completeness", value=0.0, comment="Empty response")
 
@@ -276,6 +294,66 @@ def response_completeness_evaluator(*, output, **kwargs):
         comment += " with structured formatting"
 
     return Evaluation(name="completeness", value=round(score, 2), comment=comment)
+
+
+# --------------- Trajectory Evaluator (use-case certification) ---------------
+
+# Maps a substring of the question's reasoning/type to the tool the agent MUST
+# have invoked. FinanceBench carries `question_reasoning` ("Numerical reasoning",
+# "Information extraction", "Logical reasoning") — free trajectory ground truth.
+# Agents set `trajectory.question_type` for datasets without that field
+# (e.g. "sentiment", "advisory").
+TRAJECTORY_RULES = {
+    "numerical": "calculate",
+    "logical": "calculate",
+    "sentiment": "route",
+    "advisory": "compliance-self-check",
+}
+
+
+def tool_use_correctness_evaluator(*, output, metadata=None, **kwargs):
+    """Did the agent take the right *path*, not just produce the right answer?
+
+    Deterministic. For question types that require a tool (e.g. numerical-reasoning
+    questions need the calculator), assert the agent actually invoked it. An agent
+    that guesses the right ratio without computing it is not certifiable — it will
+    not generalize.
+
+    Returns None (skipped) for non-agent runs, where ``output`` is a bare string.
+    """
+    if not isinstance(output, dict):
+        return None  # model-cert run, no trajectory to assess
+
+    trajectory = output.get("trajectory", {}) or {}
+    reasoning = (
+        (metadata or {}).get("question_reasoning")
+        or trajectory.get("question_type")
+        or ""
+    ).lower()
+    tools_used = trajectory.get("tools_used", []) or []
+
+    required = sorted({
+        tool for key, tool in TRAJECTORY_RULES.items() if key in reasoning
+    })
+
+    if not required:
+        return Evaluation(
+            name="tool_use_correctness", value=1.0,
+            comment=f"No tool required for '{reasoning or 'unspecified'}'",
+        )
+
+    missing = [t for t in required if t not in tools_used]
+    if missing:
+        return Evaluation(
+            name="tool_use_correctness", value=0.0,
+            comment=f"'{reasoning}' requires {required}; missing {missing}; "
+                    f"tools_used={tools_used}",
+        )
+
+    return Evaluation(
+        name="tool_use_correctness", value=1.0,
+        comment=f"Trajectory appropriate for '{reasoning}' (used {required})",
+    )
 
 
 # --------------- LLM-as-a-Judge Evaluators ---------------
@@ -321,6 +399,8 @@ def groundedness_evaluator(*, input, output, **kwargs):
     """
     if _get_anthropic_client is None:
         return None  # SDK not installed, skip score creation
+
+    output = _answer_text(output)
 
     # Extract evidence and question from input
     if isinstance(input, dict):
@@ -430,5 +510,46 @@ def certification_gate(score_name: str, threshold: float = DEFAULT_THRESHOLD):
                     f"avg {score_name}: {avg:.1%} "
                     f"({'above' if passed else 'below'} {threshold:.0%} threshold, "
                     f"{len(values)} items)"
+        )
+    return evaluator
+
+
+def usecase_certification_gate(thresholds: dict):
+    """Factory: multi-dimensional run-level gate for use-case certification.
+
+    Unlike ``certification_gate`` (one score vs one threshold), a use case is
+    certified only if EVERY dimension's run-level average clears its threshold at
+    once — accuracy AND groundedness AND compliance AND tool-use correctness. A
+    dimension with no recorded scores averages to 0.0 and therefore fails (you
+    cannot certify a bar you did not measure).
+
+    Usage:
+        run_evaluators=[usecase_certification_gate({
+            "numerical_accuracy": 0.85,
+            "groundedness": 0.80,
+            "regulatory_compliance": 1.0,
+            "tool_use_correctness": 0.90,
+        })]
+    """
+    def evaluator(*, item_results, **kwargs):
+        rows = {}
+        for name, thr in thresholds.items():
+            values = [
+                ev.value for result in item_results
+                for ev in result.evaluations
+                if ev.name == name and ev.value is not None
+            ]
+            avg = sum(values) / len(values) if values else 0.0
+            rows[name] = (avg, avg >= thr, thr, len(values))
+
+        passed = all(ok for _, ok, _, _ in rows.values())
+        detail = ", ".join(
+            f"{name}={avg:.0%}{'PASS' if ok else 'FAIL'}(>={thr:.0%})"
+            for name, (avg, ok, thr, _) in rows.items()
+        )
+        return Evaluation(
+            name="certification_result",
+            value=1.0 if passed else 0.0,
+            comment=f"{'PASSED' if passed else 'FAILED'} - {detail}",
         )
     return evaluator

@@ -566,6 +566,36 @@ The [Open FinLLM Leaderboard](https://huggingface.co/spaces/TheFinAI/Open-Financ
 | Credit Risk (Taiwan) | Credit risk assessment | `TheFinAI/cra-taiwan` |
 | TATQA | Table + text hybrid QA | `ChanceFocus/flare-tatqa` |
 
+## Use-Case Certification (Agents)
+
+Beyond certifying *models*, the pipeline can certify *use cases* — multi-step
+**agents** (plan → retrieve → compute → compose) deployed for a specific business
+purpose. A use case is certified only if the **whole system** clears every
+production-readiness bar at once (accuracy **and** groundedness **and** compliance
+**and** tool-use correctness), not just a single accuracy score.
+
+| | Model certification | Use-case certification |
+|---|---|---|
+| Entry point | `run_certification.py` | `run_usecase_certification.py` |
+| `task` | one LLM call | a multi-span **agent** |
+| Trace | flat | nested (one span per agent step) |
+| Gate | one score ≥ threshold | **multi-dimensional**, all must pass |
+| Dashboard row | model name | `usecase:<name>` |
+
+```bash
+uv run python run_usecase_certification.py --list           # show use cases
+uv run python run_usecase_certification.py --use-case 10k-analyst \
+    --dataset certification/financebench-sample --model claude-sonnet-4-6
+bash scripts/demo_usecase.sh                                 # full-lifecycle demo
+```
+
+The shared foundation (multi-dimensional gate, trajectory evaluator, agent
+registry, tracing helpers) ships first; the agents land incrementally. See:
+
+- [`docs/usecase-certification.md`](docs/usecase-certification.md) — implementation spec (3 agents)
+- [`docs/usecase-architecture.md`](docs/usecase-architecture.md) — architecture + eval-lifecycle component map
+- [`docs/usecase-runbook.md`](docs/usecase-runbook.md) — runbook + demo narration
+
 ## Certification Portal
 
 A web dashboard for business and compliance stakeholders to view certification status at a glance.
