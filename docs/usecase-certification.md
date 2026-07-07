@@ -464,10 +464,21 @@ ITEM_EVALUATORS = [sentiment_evaluator, regulatory_compliance_evaluator,
 
 ### 5.4 Acceptance criteria
 
-- [ ] 3-span trace per item; `route` tool present on every item.
-- [ ] Low-confidence items show `action: "flag-for-analyst"`.
-- [ ] Gate PASS on strong model; demonstrate FAIL by lowering the confidence
-      threshold so accuracy stays high but routing mislabels (illustrative).
+- [x] 3-span trace per item; `route` tool present on every item. *(Verified
+      2026-06-09: Sonnet PASSED — sentiment 90%, compliance 100%, tool-use 100%;
+      route ran on all 10 items.)*
+- [x] Low-confidence items show `action: "flag-for-analyst"` (and a parse failure
+      defaults to low confidence, so uncertainty always escalates to a human).
+- [x] Gate PASS on strong model. **FAIL-path correction (learned during #10):** the
+      gate's only variable dimension is `sentiment_accuracy` — the answer is just the
+      label, so `regulatory_compliance` is trivially 1.0 and `route` runs on every
+      item, so `tool_use_correctness` is trivially 1.0. Lowering the confidence
+      threshold changes routing *actions* but no scored dimension, so it cannot make
+      the gate FAIL. The real FAIL story is a weak classifier dropping
+      `sentiment_accuracy` below 85% (pinned deterministically in
+      `tests/test_sentiment_triage.py`). Scoring routing-action correctness would
+      need labelled escalate/accept ground truth, which FPB does not carry — noted
+      as a future eval.
 
 ---
 

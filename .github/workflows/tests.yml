@@ -1,0 +1,35 @@
+name: Tests
+
+# Fast, offline unit tests that gate every PR (and pushes to main). These need no
+# Langfuse/Anthropic credentials or network — the agent tests monkeypatch the LLM
+# and span helpers, and the evaluator/foundation tests are pure functions.
+#
+# The live certification workflow (certification.yml) is separate: it runs the
+# real FinanceBench/FPB cert against Langfuse on push to main and on demand, and
+# its `pytest-gate` job runs the network-dependent tests/test_certification.py.
+# This workflow deliberately excludes that file so PRs are gated without secrets.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Offline unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+      - name: Run offline unit tests
+        # Exclude the live integration test (needs Langfuse + ANTHROPIC_API_KEY +
+        # seeded datasets); it runs in certification.yml's pytest-gate instead.
+        run: uv run pytest --ignore=tests/test_certification.py -v --tb=short
