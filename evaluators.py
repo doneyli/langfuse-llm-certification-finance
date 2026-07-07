@@ -303,9 +303,19 @@ def response_completeness_evaluator(*, output, **kwargs):
 # "Information extraction", "Logical reasoning") — free trajectory ground truth.
 # Agents set `trajectory.question_type` for datasets without that field
 # (e.g. "sentiment", "advisory").
+#
+# Note: only *pure* "Numerical reasoning" questions mandate the calculator.
+# "Logical reasoning (based on numerical reasoning)" questions (e.g. "Is this
+# company capital-intensive?") are yes/no judgments that draw on several ratios
+# or qualitative reasoning and do not reduce to a single sanctioned calculation,
+# so they are exempt. "Information extraction" questions need no tool. The
+# exemptions take precedence because their reasoning strings contain the word
+# "numerical" (e.g. "...based on numerical reasoning") and would otherwise match
+# the calculator rule.
+TRAJECTORY_EXEMPTIONS = ("logical reasoning", "information extraction")
+
 TRAJECTORY_RULES = {
     "numerical": "calculate",
-    "logical": "calculate",
     "sentiment": "route",
     "advisory": "compliance-self-check",
 }
@@ -331,6 +341,14 @@ def tool_use_correctness_evaluator(*, output, metadata=None, **kwargs):
         or ""
     ).lower()
     tools_used = trajectory.get("tools_used", []) or []
+
+    # Exemptions take precedence (judgment / extraction questions need no tool,
+    # even when their reasoning string mentions "numerical").
+    if any(ex in reasoning for ex in TRAJECTORY_EXEMPTIONS):
+        return Evaluation(
+            name="tool_use_correctness", value=1.0,
+            comment=f"No tool required (judgment/extraction) for '{reasoning}'",
+        )
 
     required = sorted({
         tool for key, tool in TRAJECTORY_RULES.items() if key in reasoning

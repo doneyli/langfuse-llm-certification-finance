@@ -129,12 +129,15 @@ class TestToolUseCorrectness:
         )
         assert ev.value == 1.0
 
-    def test_logical_reasoning_requires_calculator(self):
+    def test_logical_reasoning_does_not_mandate_calculator(self):
+        # "Logical reasoning (based on numerical reasoning)" questions are yes/no
+        # judgments over several ratios; they do not reduce to one sanctioned
+        # calculation, so the calculator is not required (only pure "numerical").
         ev = tool_use_correctness_evaluator(
-            output=self._out("Logical reasoning", []),
-            metadata={"question_reasoning": "Logical reasoning"},
+            output=self._out("Logical reasoning (based on numerical reasoning)", []),
+            metadata={"question_reasoning": "Logical reasoning (based on numerical reasoning)"},
         )
-        assert ev.value == 0.0
+        assert ev.value == 1.0
 
     def test_information_extraction_needs_no_tool(self):
         ev = tool_use_correctness_evaluator(

@@ -75,44 +75,29 @@ PROMPTS = [
     # registered by the foundation so prompt management is wired before the
     # agents run. See docs/usecase-certification.md.
     # ---------------------------------------------------------------------
-    {
-        "name": "usecase-10k-analyst-plan",
-        "type": "text",
-        "prompt": (
-            "You are a financial analyst planning how to answer a question about "
-            "an SEC filing. The question's reasoning type is: {{qtype}}.\n\n"
-            "List the exact line items you need from the filing. If the answer "
-            "requires arithmetic (a ratio, a year-over-year change, an average), "
-            "emit a single line starting with 'CALCULATE:' followed by the formula "
-            "in words. If it is pure extraction, do not emit CALCULATE.\n\n"
-            "--- Question ---\n{{question}}"
-        ),
-        "labels": ["production"],
-        "tags": ["certification", "use-case", "10k-analyst"],
-        "config": {
-            "description": "10-K Analyst agent — PLAN step. Classifies the question "
-                           "and decides whether the calculator tool is needed (#9).",
-            "variables": ["question", "qtype"],
-        },
-    },
+    # Note: the 10-K Analyst's PLAN and EXTRACT steps emit JSON the agent parses,
+    # so their prompts are code-owned (in agents/financial_analyst.py) to keep
+    # parsing stable against UI edits. Only the free-form COMPOSE step is managed
+    # here, so it can be edited/versioned in the Langfuse UI.
     {
         "name": "usecase-10k-analyst-compose",
         "type": "text",
         "prompt": (
             "You are a financial analyst writing the final answer. Use ONLY the "
-            "operands and computed value provided; never invent numbers. Cite the "
-            "line items the answer rests on.\n\n"
+            "operands and computed value provided; never invent numbers. State the "
+            "answer precisely in the units/format the question asks for, and cite "
+            "the line items. Do not give buy/sell advice or use promotional "
+            "language.\n\n"
             "--- Question ---\n{{question}}\n\n"
-            "--- Operands extracted from the filing ---\n{{operands}}\n\n"
+            "--- Operands ---\n{{operands}}\n\n"
             "--- Computed value (from the calculator tool, if any) ---\n{{computed}}\n\n"
-            "--- Citations ---\n{{citations}}\n\n"
-            "Write a precise, grounded answer."
+            "--- Citations ---\n{{citations}}"
         ),
         "labels": ["production"],
         "tags": ["certification", "use-case", "10k-analyst"],
         "config": {
-            "description": "10-K Analyst agent — COMPOSE step. Grounded answer with "
-                           "citations, no invented numbers (#9).",
+            "description": "10-K Analyst agent — COMPOSE step (managed/editable). "
+                           "Grounded answer with citations, no invented numbers (#9).",
             "variables": ["question", "operands", "computed", "citations"],
         },
     },

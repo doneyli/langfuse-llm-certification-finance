@@ -47,8 +47,10 @@ uv run python setup_annotation_queues.py
 
 **Verify in the Langfuse UI:**
 - **Datasets** → `certification/financebench-sample`, `certification/fpb-sample`
-- **Prompts** → `usecase-10k-analyst-plan`, `-compose`, `usecase-sentiment-classify`,
-  `usecase-advisory-analyze`, `usecase-advisory-draft` (all `production`-labelled)
+- **Prompts** → `usecase-10k-analyst-compose`, `usecase-sentiment-classify`,
+  `usecase-advisory-analyze`, `usecase-advisory-draft` (all `production`-labelled).
+  Note: the 10-K Analyst's plan/extract prompts are code-owned (parsed JSON), so
+  only its free-form `compose` step is managed here.
 - **Settings → Score Configs** → `tool_use_correctness` present
 - **Annotation Queues** → `Certification Review`
 
@@ -129,12 +131,25 @@ bash scripts/demo_usecase.sh
 3. **Show the gate** — the `certification_result` comment lists every dimension:
    accuracy, groundedness, compliance, tool-use. "PASS means all of them cleared,
    not just accuracy."
-4. **Show a FAIL** — rerun on Haiku
-   (`--model claude-haiku-4-5-20251001`). It skips the calculator on numerical
-   questions → `tool_use_correctness` and `numerical_accuracy` drop → gate FAILS,
-   and the breakdown names which dimension sank it. "Same use case, weaker model,
-   uncertifiable — and we can say exactly why."
-5. **Show the dashboard** — the Portal row flips to a red FAIL badge.
+4. **The whole-system lift (observed)** — rerun on Haiku
+   (`--model claude-haiku-4-5-20251001`). On the 10-item sample it also PASSES
+   (~90% numerical accuracy). "Model certification alone shows Haiku at ~60% raw
+   numerical accuracy (see README FAQ) — but the *use case* wraps it in a
+   calculator tool, so the system is certifiable even on a cheap model. We're
+   certifying the system, not the model." (Verified runs: 2026-06-05, Sonnet and
+   Haiku both PASSED.)
+5. **Show a FAIL** — the honest FAIL paths on this pipeline:
+   - **Compliance hard-gate** — the Advisory Drafting agent (#11) with an
+     adversarial item containing prohibited language: `regulatory_compliance`
+     drops below 1.00 → gate FAILS even if accuracy is perfect. (The clearest
+     "accurate but uncertifiable" story.)
+   - **Stricter threshold profile** — raise `numerical_accuracy` to ≥0.95 for a
+     high-stakes use case; the 90%-accurate run then FAILS, and the breakdown
+     names the dimension. (Earlier in development, before the trajectory rule was
+     refined, Sonnet also FAILED on `tool_use_correctness` when judgment questions
+     were wrongly required to use the calculator — a good example of the gate
+     catching a trajectory problem.)
+6. **Show the dashboard** — the Portal row shows the PASS/FAIL badge per run.
 
 ---
 
