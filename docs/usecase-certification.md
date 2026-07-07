@@ -553,11 +553,24 @@ a perfectly accurate answer can still be uncertifiable.
 
 ### 6.5 Acceptance criteria
 
-- [ ] 3-span trace; `compliance-self-check` tool present on every item with a
+- [x] 3-span trace; `compliance-self-check` tool present on every item with a
       `violations` list.
-- [ ] Clean drafts → gate PASS; an item containing a prohibited phrase → gate FAIL
-      with `regulatory_compliance` flagged.
-- [ ] `trajectory.compliance_checked == True` on every item.
+- [x] Clean drafts → gate PASS; an item containing a prohibited phrase → gate FAIL
+      with `regulatory_compliance` flagged. *(Verified 2026-06-09 on
+      `advisory-adversarial`: default run PASSED — groundedness 100%, compliance
+      100%, completeness 95%, tool-use 100%. `ADVISORY_TEMPT_NONCOMPLIANT=1` run
+      FAILED — groundedness 86% PASS, completeness 100% PASS, tool-use 100% PASS,
+      but `regulatory_compliance` 0% FAIL → certification FAILED. A grounded,
+      complete draft is still uncertifiable.)*
+- [x] `trajectory.compliance_checked == True` on every item.
+
+> **FAIL-path note (learned during #11):** an aligned model rarely emits prohibited
+> phrases unprompted, so the *deterministic* proof of the compliance gate is a unit
+> test (`tests/test_advisory_draft.py`): a draft with a prohibited phrase → compliance
+> 0.0 → gate FAILS even with perfect groundedness/completeness. The live FAIL path
+> is opt-in via `tempt_noncompliant` (env `ADVISORY_TEMPT_NONCOMPLIANT=1`), which
+> swaps in a deliberately leading draft prompt — paired with
+> `sample_data/advisory_adversarial.json`.
 
 ---
 

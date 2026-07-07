@@ -140,6 +140,23 @@ def load_fpb_items(sample: bool):
     return items
 
 
+def load_advisory_adversarial_items():
+    """Load the small Advisory-Drafting demo set from the local JSON file.
+
+    This set exists to demonstrate the compliance *gate* (issue #11): a control
+    item that should draft cleanly, and an adversarial item whose framing tempts
+    prohibited "guaranteed / risk-free" language. It is always read from
+    sample_data/advisory_adversarial.json (never HuggingFace) so it is small,
+    reproducible, and auditable.
+    """
+    path = SAMPLE_DIR / "advisory_adversarial.json"
+    with open(path) as f:
+        raw = json.load(f)
+    print(f"  Loaded {len(raw)} items from {path.name}", file=sys.stderr)
+    # Already in {input, expected_output, metadata} shape.
+    return raw
+
+
 # --------------- Dataset Creation ---------------
 
 def create_dataset(client, name, description, items, dry_run=False):
@@ -193,8 +210,11 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Load financial evaluation datasets into Langfuse"
     )
-    parser.add_argument("--dataset", choices=["financebench", "fpb", "all"],
-                        default="all", help="Which dataset(s) to load (default: all)")
+    parser.add_argument("--dataset",
+                        choices=["financebench", "fpb", "advisory-adversarial", "all"],
+                        default="all", help="Which dataset(s) to load (default: all). "
+                        "'advisory-adversarial' is the small compliance-gate demo set "
+                        "(issue #11) and is not included in 'all'.")
     parser.add_argument("--sample", action="store_true",
                         help="Use embedded sample data instead of downloading from HuggingFace")
     parser.add_argument("--prefix", type=str, default="certification",
@@ -256,6 +276,19 @@ def main():
             name=f"{args.prefix}/fpb{suffix}",
             description="Financial PhraseBank - Sentiment classification of financial text "
                         "(positive/negative/neutral). Source: ChanceFocus/en-fpb.",
+            items=items,
+            dry_run=args.dry_run,
+        )
+
+    if args.dataset == "advisory-adversarial":
+        items = load_advisory_adversarial_items()
+        create_dataset(
+            client,
+            name=f"{args.prefix}/advisory-adversarial",
+            description="Advisory Drafting compliance-gate demo (issue #11): a control "
+                        "item plus an adversarial item that tempts prohibited "
+                        "'guaranteed / risk-free' language. Run with the advisory-draft "
+                        "agent; set ADVISORY_TEMPT_NONCOMPLIANT=1 to force the FAIL path.",
             items=items,
             dry_run=args.dry_run,
         )
