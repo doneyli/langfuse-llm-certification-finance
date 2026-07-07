@@ -4,7 +4,8 @@ Companion to [`usecase-certification.md`](usecase-certification.md) (the
 implementation spec) and [`usecase-runbook.md`](usecase-runbook.md) (how to run
 it). This document shows the architecture and maps every stage of the evaluation
 lifecycle to the Langfuse primitive and the file that owns it — and marks what is
-**wired** today (PR #12, issue #8) vs **pending** in the agent issues (#9–#11).
+**wired** today (PR #12, issue #8) vs the three agents now **implemented** in open
+PRs — #9 (PR #13), #10 (PR #14), #11 (PR #15).
 
 ---
 
@@ -101,15 +102,15 @@ file that owns it, and its status in this workstream.
 |---|---|---|---|---|
 | 1 | **Golden data** | Datasets | `setup_datasets.py` | ✅ wired (reused unchanged) |
 | 2 | **Prompt management** | Prompts (versioned, `production` label) | `setup_prompts.py` (templates) + `cert_common.get_managed_prompt` (fetch) | ✅ templates registered; agents consume in #9–#11 |
-| 3 | **Agent execution & tracing** | Observations: `generation` / `span` / `tool` | `agents/base.py` (`traced_generation/span/tool`) + each agent | 🟡 foundation wired; **span-nesting inside `run_experiment` is live-unverified** → first spike in #9 |
+| 3 | **Agent execution & tracing** | Observations: `generation` / `span` / `tool` | `agents/base.py` (`traced_generation/span/tool`) + each agent | ✅ wired; span-nesting inside `run_experiment` **verified** (spike + live runs); all three agents implemented — #9 (PR #13), #10 (PR #14), #11 (PR #15) |
 | 4 | **Item scoring** | Scores + Score Configs | `evaluators.py` + `setup_score_configs.py` | ✅ wired (incl. new `tool_use_correctness`) |
 | 5 | **Run-level gate** | Score `certification_result` | `evaluators.usecase_certification_gate` + `cert_common.persist_run_evaluations` | ✅ wired (multi-dimensional, all-must-pass) |
 | 6 | **Human review** | Annotation Queues | `setup_annotation_queues.py` + `cert_common.queue_failed_items` | ✅ wired (reused) |
 | 7 | **Reporting / status** | Portal + export | Portal (`metadata.model="usecase:<name>"`) + `export_results.py` | ✅ free dashboard row, no portal change |
 | 8 | **Production monitoring** | Online evaluation / live traces | `monitor_production.py` + UI LLM-as-judge | ✅ reused; applies to deployed agents |
 
-Legend: ✅ wired in PR #12 · 🟡 partially wired, has a live-unverified assumption ·
-⬜ pending in agent issues.
+Legend: ✅ wired and verified · 🟡 partially wired, has a live-unverified assumption ·
+⬜ pending. (As of the agent PRs #13/#14/#15, every stage is ✅.)
 
 ---
 
@@ -130,14 +131,15 @@ credentials, prompt fetch, score persistence, and queue routing live in one plac
 
 ---
 
-## 5. Where the risk is
+## 5. Where the risk was
 
-- **Span nesting (stage 3).** The langfuse 3.14.6 API surface is confirmed
-  (`start_as_current_observation(as_type=…, model=…, usage_details=…)`), but that
-  observations opened *inside a `run_experiment` task callback* nest under the
-  per-item trace is not yet confirmed against a live run. If they instead become
-  separate root traces, the agent must thread `trace_context` explicitly. This is
-  the **first thing #9 must verify** before building the full agent.
+- **Span nesting (stage 3) — RESOLVED.** The open question was whether observations
+  opened *inside a `run_experiment` task callback* nest under the per-item trace or
+  become separate root traces. Confirmed nesting via the spike
+  (`scripts/spike_span_nesting.py`, #9) and every agent's live run since: the
+  10-K Analyst, Sentiment Triage, and Advisory Draft agents all render a single
+  nested trace per item (plan/classify/analyze → … → tool), so no explicit
+  `trace_context` threading is needed.
 - **Prompt drift.** Agent prompts are registered but unversioned-in-anger until an
   agent actually fetches them; once #9 runs, promote/rollback works exactly like
   `financial-qa`.
