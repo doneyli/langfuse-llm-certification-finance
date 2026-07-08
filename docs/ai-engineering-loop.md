@@ -74,8 +74,9 @@ and experimentation are required instead."* That is why this is a loop.
 
 Two edges *close* the loop. Both are called out honestly in
 [Closing the loop](#closing-the-loop-what-is-wired-vs-open) — one is partially
-wired, one is not wired yet. Everything **inside** the cycle runs today on this
-branch (all three agents assembled — see [Demoing this](#demoing-this)).
+wired; the other's GitHub receiver is now wired (pending a one-time Langfuse-side
+config). Everything **inside** the cycle runs today on `main` (all three agents
+assembled — see [Demoing this](#demoing-this)).
 
 ---
 
@@ -225,12 +226,12 @@ closure — "annotate a queued trace → one click adds it to
 worthwhile next build, but it is **not** implemented here. (Do not read the
 annotation queue as loop-closure; it stops at human review.)
 
-### Edge B — Ship → Re-certify (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *not wired*
+### Edge B — Ship → Re-certify (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *receiver wired; needs Langfuse config*
 
 This is the *"is the GitHub integration part of a true CI/CD pipe?"* question, and
 the answer is **yes — it is exactly the mechanism that turns prompt promotion into
-governed, auditable, automatic re-certification.** Here is how it fits, and what is
-missing.
+governed, auditable, automatic re-certification.** Here is how it fits, and what
+this repo now wires.
 
 **Where prompts sit in the loop.** The `compose`/`draft` steps are managed Langfuse
 prompts with a `production` label. Promoting a new version *is* a deploy — it
@@ -252,13 +253,13 @@ is the source of truth):
 
 ```
 promote prompt in Langfuse UI
-   │  (repository_dispatch)                    (sync-to-repo webhook)
-   ▼                                                     │
-GitHub Actions: run_usecase_certification.py --ci   ──┐  ▼
-   │  re-runs Experiment + Evaluate on the golden set │  git commit: "updated:
-   ▼                                                   │   usecase-advisory-draft v7"
-gate PASS → allow the promotion to stand              │  → compliance audit trail
-gate FAIL → alert / block / roll back the label ◀─────┘
+   │  (repository_dispatch: langfuse-prompt-update)     (sync-to-repo webhook)
+   ▼                                                              │
+prompt-recert.yml → recert_for_prompt.py → --ci   ──────┐         ▼
+   │  re-runs Experiment + Evaluate on the golden set   │  git commit: "updated:
+   ▼                                                     │   usecase-advisory-draft v7"
+gate PASS → allow the promotion to stand                │  → compliance audit trail
+gate FAIL → workflow red → alert / roll back the label ◀┘
 ```
 
 That is the governance story: **a prompt can never be silently promoted to
@@ -271,13 +272,19 @@ prompt change, not just on a code push.
   `cert_common.get_managed_prompt`).
 - ✅ A CI gate exists: `run_usecase_certification.py --ci` exits non-zero on gate
   FAIL, and `.github/workflows/certification.yml` runs certification in Actions.
-- ⬜ **The trigger is wrong for CI/CD-on-prompt-change.** `certification.yml` fires
-  on **push to `main`** and **manual dispatch** — *not* on a Langfuse prompt
-  promotion. Wiring `repository_dispatch` (and pointing it at
-  `run_usecase_certification.py --use-case … --ci`) is the missing piece that makes
-  this a *true* prompt CI/CD loop.
+- ✅ **`repository_dispatch` receiver wired.** `.github/workflows/prompt-recert.yml`
+  listens for `repository_dispatch` (`event_type: langfuse-prompt-update`), maps the
+  changed prompt to its use-case / model target (`scripts/recert_for_prompt.py`),
+  and re-runs the gate with `--ci`. It dedups Langfuse's double-dispatch by acting
+  only on the version now carrying `production`, and routes on prompt *name* (not
+  payload content, which GitHub truncates). A `workflow_dispatch` input makes it
+  testable without the webhook.
+- 🟡 **One-time Langfuse config to activate.** Create the matching automation in
+  **Prompts → Automations → GitHub Repository Dispatch** (event type
+  `langfuse-prompt-update`, a GitHub PAT with `actions` read/write) — UI + secret,
+  not code. Until then the receiver simply never fires.
 - ⬜ **Sync-to-Repo webhook** (the git audit archive of prompt versions) is not set
-  up — no webhook server, no commit-on-promote.
+  up — that path needs a small webhook server (see the Langfuse docs).
 
 ### Summary table
 
@@ -289,7 +296,7 @@ prompt change, not just on a code push.
 | 4 Experiment | Experiments; prompt versions | ✅ wired (model / prompt / threshold comparisons) |
 | 5 Evaluate | Scores + multi-dim gate | ✅ wired (`usecase_certification_gate`) |
 | **A** Monitor → Dataset | queue → dataset promotion | 🟡 partial — human queue yes, auto-promotion no |
-| **B** Prompt promote → re-cert | GitHub `repository_dispatch` + sync webhook | ⬜ not wired — substrate present, trigger missing |
+| **B** Prompt promote → re-cert | GitHub `repository_dispatch` + sync webhook | 🟡 receiver wired (`prompt-recert.yml`); needs one-time Langfuse automation config; sync-to-repo still open |
 
 ---
 

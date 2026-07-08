@@ -1,0 +1,68 @@
+name: Prompt Re-Certification
+
+# Loop edge B (see docs/ai-engineering-loop.md): when a managed prompt is
+# PROMOTED in Langfuse (a deploy that bypasses git), automatically re-run the
+# affected use-case / model certification gate. A promotion that regresses the
+# gate fails this workflow instead of silently shipping to production.
+#
+# One-time Langfuse setup (Prompts > Automations > Create Automation >
+# GitHub Repository Dispatch):
+#   Dispatch URL: https://api.github.com/repos/<owner>/<repo>/dispatches
+#   Event Type:   langfuse-prompt-update      (must match `types` below)
+#   GitHub Token: a PAT with actions read/write (fine-grained) or `repo` scope
+# Docs: https://langfuse.com/docs/prompt-management/features/github-integration
+#
+# Secrets required (same as certification.yml):
+#   LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL, ANTHROPIC_API_KEY
+
+on:
+  repository_dispatch:
+    types: [langfuse-prompt-update]
+  # Manual trigger so the pipeline is testable without the Langfuse webhook.
+  workflow_dispatch:
+    inputs:
+      prompt_name:
+        description: 'Prompt name to re-certify (e.g. usecase-advisory-draft)'
+        required: true
+      model:
+        description: 'Model to run the re-certification with'
+        required: false
+        default: 'claude-sonnet-4-6'
+
+env:
+  LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+  LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+  LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  recertify:
+    name: Re-certify affected target
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Dedup: a label change fires TWO dispatches (the version that GAINED the
+    # label and the version that LOST it). Only act on the version that now
+    # carries `production`, so we re-certify exactly the deployed version, once.
+    # Manual runs always proceed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.client_payload.prompt.labels, 'production')
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+      - name: Re-certify the affected target
+        env:
+          PROMPT_NAME: ${{ github.event.inputs.prompt_name || github.event.client_payload.prompt.name }}
+          RECERT_MODEL: ${{ github.event.inputs.model || 'claude-sonnet-4-6' }}
+          PROMPT_ACTION: ${{ github.event.client_payload.action || 'manual' }}
+        run: |
+          echo "Prompt changed: '${PROMPT_NAME}' (action=${PROMPT_ACTION}, model=${RECERT_MODEL})"
+          uv run python scripts/recert_for_prompt.py \
+            --prompt-name "${PROMPT_NAME}" \
+            --model "${RECERT_MODEL}"
