@@ -102,60 +102,94 @@ def persist_run_evaluations(result):
 
 # --------------- Annotation queue routing ---------------
 
+def _find_review_queue_id(host, auth, headers):
+    """Return the 'Certification Review' annotation-queue id, or None (+warning)."""
+    try:
+        req = urllib.request.Request(
+            f"{host}/api/public/annotation-queues?limit=100", headers=headers)
+        queues = json.loads(urllib.request.urlopen(req).read()).get("data", [])
+        queue_id = next(
+            (q["id"] for q in queues if q["name"] == REVIEW_QUEUE_NAME), None)
+        if not queue_id:
+            print(f"  Warning: annotation queue '{REVIEW_QUEUE_NAME}' not found. "
+                  f"Run setup_annotation_queues.py first.", file=sys.stderr)
+        return queue_id
+    except Exception as e:
+        print(f"  Warning: could not list annotation queues: {e}", file=sys.stderr)
+        return None
+
+
+def queue_trace_ids(trace_ids):
+    """Add trace ids to the 'Certification Review' annotation queue for human review.
+
+    Deduplicates the input, skips falsy ids, and returns the number queued. This is
+    the shared primitive behind both offline-cert failure routing (queue_failed_items)
+    and live production-monitoring routing (monitor_production.py --queue-violations),
+    so a flagged trace reaches the same human-review inbox regardless of source.
+
+    Requires the queue to exist (created by setup_annotation_queues.py).
+    """
+    unique = [t for t in dict.fromkeys(trace_ids) if t]
+    if not unique:
+        return 0
+    host, auth = langfuse_creds()
+    headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
+    queue_id = _find_review_queue_id(host, auth, headers)
+    if not queue_id:
+        return 0
+
+    queued = 0
+    for tid in unique:
+        try:
+            body = json.dumps({
+                "objectId": tid, "objectType": "TRACE", "status": "PENDING",
+            }).encode()
+            req = urllib.request.Request(
+                f"{host}/api/public/annotation-queues/{queue_id}/items",
+                data=body, headers=headers, method="POST")
+            urllib.request.urlopen(req)
+            queued += 1
+        except Exception as e:
+            print(f"  Warning: failed to queue trace {tid[:12]}...: {e}",
+                  file=sys.stderr)
+
+    if queued:
+        print(f"\n  Queued {queued} trace(s) for human review in '{REVIEW_QUEUE_NAME}'",
+              file=sys.stderr)
+    return queued
+
+
 def queue_failed_items(item_results, should_queue):
-    """Route traces to the 'Certification Review' annotation queue for human review.
+    """Route failing experiment items to the review queue (offline cert runs).
 
     Args:
         item_results: experiment item results (each with .trace_id and .evaluations).
         should_queue: callable(list_of_evaluations) -> bool, deciding per item.
+    """
+    trace_ids = [ir.trace_id for ir in item_results
+                 if getattr(ir, "trace_id", None) and should_queue(ir.evaluations)]
+    return queue_trace_ids(trace_ids)
 
-    Requires the queue to exist (created by setup_annotation_queues.py).
+
+def fetch_review_queue_trace_ids(limit=100):
+    """Return the trace ids of TRACE items currently in the review queue.
+
+    Used to promote human-reviewed production traces into a golden dataset
+    (see promote_trace_to_dataset.py --from-queue) — the queue → dataset step
+    that closes the observation → development feedback edge.
     """
     host, auth = langfuse_creds()
     headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
-
-    # Find the queue ID
+    queue_id = _find_review_queue_id(host, auth, headers)
+    if not queue_id:
+        return []
     try:
         req = urllib.request.Request(
-            f"{host}/api/public/annotation-queues?limit=100",
-            headers=headers,
-        )
-        queues = json.loads(urllib.request.urlopen(req).read()).get("data", [])
-        queue_id = next(
-            (q["id"] for q in queues if q["name"] == REVIEW_QUEUE_NAME), None
-        )
-        if not queue_id:
-            print(f"  Warning: annotation queue '{REVIEW_QUEUE_NAME}' not found. "
-                  f"Run setup_annotation_queues.py first.", file=sys.stderr)
-            return
+            f"{host}/api/public/annotation-queues/{queue_id}/items?limit={limit}",
+            headers=headers)
+        items = json.loads(urllib.request.urlopen(req).read()).get("data", [])
+        return [it["objectId"] for it in items
+                if it.get("objectType") == "TRACE" and it.get("objectId")]
     except Exception as e:
-        print(f"  Warning: could not list annotation queues: {e}", file=sys.stderr)
-        return
-
-    queued = 0
-    for ir in item_results:
-        if not getattr(ir, "trace_id", None):
-            continue
-        if not should_queue(ir.evaluations):
-            continue
-        try:
-            body = json.dumps({
-                "objectId": ir.trace_id,
-                "objectType": "TRACE",
-                "status": "PENDING",
-            }).encode()
-            req = urllib.request.Request(
-                f"{host}/api/public/annotation-queues/{queue_id}/items",
-                data=body,
-                headers=headers,
-                method="POST",
-            )
-            urllib.request.urlopen(req)
-            queued += 1
-        except Exception as e:
-            print(f"  Warning: failed to queue trace {ir.trace_id[:12]}...: {e}",
-                  file=sys.stderr)
-
-    if queued:
-        print(f"\n  Queued {queued} items for human review in '{REVIEW_QUEUE_NAME}'",
-              file=sys.stderr)
+        print(f"  Warning: could not fetch queue items: {e}", file=sys.stderr)
+        return []

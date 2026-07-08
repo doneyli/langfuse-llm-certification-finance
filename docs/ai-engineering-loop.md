@@ -49,7 +49,7 @@ and experimentation are required instead."* That is why this is a loop.
         │            │   monitor_production.py · UI LLM-as-judge
         └─────┬──────┘
               │  ┌─────────────────────────────────────────────┐
-              │  │  FEEDBACK EDGE (partially wired — see §Close) │
+              │  │  FEEDBACK EDGE (wired, human-gated — §Close)  │
               │  │  a surfaced failure should become golden data │
               ▼  ▼
         ┌────────────────┐   real failures + designed edge cases
@@ -72,11 +72,11 @@ and experimentation are required instead."* That is why this is a loop.
                                the GitHub-integration edge — see §CI/CD)
 ```
 
-Two edges *close* the loop. Both are called out honestly in
-[Closing the loop](#closing-the-loop-what-is-wired-vs-open) — one is partially
-wired; the other's GitHub receiver is now wired (pending a one-time Langfuse-side
-config). Everything **inside** the cycle runs today on `main` (all three agents
-assembled — see [Demoing this](#demoing-this)).
+Two edges *close* the loop, and both are now wired (see
+[Closing the loop](#closing-the-loop-what-is-wired-vs-open)) — Edge A human-gated
+by design, Edge B pending a one-time Langfuse-side config. Everything **inside** the
+cycle runs today on `main` (all three agents assembled — see
+[Demoing this](#demoing-this)).
 
 ---
 
@@ -118,10 +118,11 @@ the scores back, and **exits non-zero on a compliance violation** so it wires in
 alerting. For subjective drift (groundedness, helpfulness) you add a Langfuse
 **LLM-as-a-Judge** evaluator on Live Observations directly in the UI, sampled to
 manage cost. Human sign-off happens through the **Certification Review**
-annotation queue — but note that queue is populated by the *offline* certification
-runner (`--queue-failures` → `cert_common.queue_failed_items`), **not** by
-`monitor_production.py`; wiring live-monitored violations into it is part of the
-open feedback edge ([Edge A](#closing-the-loop-what-is-wired-vs-open)).
+annotation queue, fed from either side: the offline certification runner
+(`--queue-failures`) and now live monitoring too
+(`monitor_production.py --queue-violations` → `cert_common.queue_trace_ids`). From
+there a reviewed trace can be promoted into the golden dataset — the feedback edge
+that closes the loop ([Edge A](#closing-the-loop-what-is-wired-vs-open)).
 
 **Langfuse primitive:** Scores on production traces + online LLM-as-a-judge +
 annotation queues. **See it:** UI → **Tracing**/**Scores**, and **Annotation
@@ -139,8 +140,9 @@ Queues → Certification Review**.
   crafted to tempt "guaranteed returns" language, so the compliance gate has
   something to *catch*. This is a designed edge case, not a real one.
 
-The **real**-scenario source (a production failure becoming a dataset item) is the
-open feedback edge — see [Closing the loop](#closing-the-loop-what-is-wired-vs-open).
+- **Real** — a production failure becoming a dataset item: `promote_trace_to_dataset.py`
+  turns a flagged/reviewed trace into a golden item (the feedback edge that closes
+  the loop — see [Closing the loop](#closing-the-loop-what-is-wired-vs-open)).
 
 **Langfuse primitive:** Datasets + dataset items. **See it:** UI → **Datasets**.
 
@@ -201,30 +203,46 @@ of gating the use case rather than scoring the model.
 ## Closing the loop: what is wired vs open
 
 The stages above all run today. What makes it a *loop* is the two edges that feed
-the output of one cycle into the input of the next. Per the goal, these are
-**called out honestly** — one is partial, one is not built:
+the output of one cycle into the input of the next. Both are now wired — each with
+an honest caveat about what remains manual:
 
-### Edge A — Observation → Development (Monitor → Build Datasets) · *partially wired*
+### Edge A — Observation → Development (Monitor → Build Datasets) · *wired (human-gated)*
 
 **The loop's promise:** a failure surfaced in production becomes a repeatable test
 case, so you never regress on it again.
 
-**What's wired:** `monitor_production.py` scores live traces and flags violations
-(alerting via a non-zero exit). *Separately*, the **offline** certification runner
-routes failing items into the **Certification Review** annotation queue
-(`queue_failed_items`, via `--queue-failures`) — that path runs on `run_experiment`
-results, **not** on the live traces `monitor_production.py` sees. So the two
-mechanisms exist, but they are not connected to each other.
+**What's wired — the full chain:**
 
-**What's open:** two links are missing. (1) `monitor_production.py` does not route a
-live violation into the annotation queue — it only scores and exits. (2) More
-importantly, there is **no automated path from a flagged/annotated trace to a new
-golden dataset item.** Today that promotion is a manual step (copy the failing
-trace's input/expected into a dataset via the UI or `setup_datasets.py`). The clean
-closure — "annotate a queued trace → one click adds it to
-`certification/financebench-sample` → next experiment includes it" — is a
-worthwhile next build, but it is **not** implemented here. (Do not read the
-annotation queue as loop-closure; it stops at human review.)
+```
+monitor_production.py --queue-violations   →  flagged live trace → review queue
+   │  (a human reviews the queued trace + decides the correct answer)
+   ▼
+promote_trace_to_dataset.py --from-queue   →  reviewed trace → golden dataset item
+   │
+   ▼
+run_usecase_certification.py ...           →  next Experiment regression-tests it
+```
+
+1. **Monitor → queue.** `monitor_production.py --queue-violations` routes any live
+   trace with a compliance violation into the **Certification Review** annotation
+   queue (shared `cert_common.queue_trace_ids`), so live failures land in the same
+   human-review inbox as offline-cert failures.
+2. **Queue/trace → dataset.** `promote_trace_to_dataset.py` turns a specific trace
+   (`--trace-id`) or the whole review queue (`--from-queue`) into golden dataset
+   items. Item ids are derived from the trace id (`prod-<traceId>`) so re-runs
+   **upsert** rather than duplicate, and `source_trace_id` links each item back to
+   its origin for audit.
+
+**Deliberately human-gated (by design, not a gap):** promotion captures the trace
+*input* (the scenario) but **not** its output as the expected answer — a flagged
+trace's output is suspect, and auto-promoting it would poison the golden set. The
+reviewer supplies the correct answer (`--expected`) or the item is flagged
+`needs_expected_review` for a human to complete in the Langfuse UI before it counts.
+So the loop closes, but a person still authorizes what becomes "golden" — the right
+control for a regulated use case.
+
+**Still open:** a *one-click* UI promotion (annotate → add to dataset without the
+CLI) is not built; the promotion is a deliberate CLI step.
 
 ### Edge B — Ship → Re-certify (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *receiver wired; needs Langfuse config*
 
@@ -292,10 +310,10 @@ prompt change, not just on a code push.
 |---|---|---|
 | 1 Trace | Observations (nested spans) | ✅ wired — all 3 agents |
 | 2 Monitor | Scores on live traces + online judge + queues | ✅ wired (`monitor_production.py`) |
-| 3 Build Datasets | Datasets + items | ✅ wired (designed + adversarial); real-failure source open (Edge A) |
+| 3 Build Datasets | Datasets + items | ✅ wired — designed + adversarial + real-failure promotion (`promote_trace_to_dataset.py`, Edge A) |
 | 4 Experiment | Experiments; prompt versions | ✅ wired (model / prompt / threshold comparisons) |
 | 5 Evaluate | Scores + multi-dim gate | ✅ wired (`usecase_certification_gate`) |
-| **A** Monitor → Dataset | queue → dataset promotion | 🟡 partial — human queue yes, auto-promotion no |
+| **A** Monitor → Dataset | `--queue-violations` → review → `promote_trace_to_dataset.py` | ✅ wired (human-gated); one-click UI promotion still open |
 | **B** Prompt promote → re-cert | GitHub `repository_dispatch` + sync webhook | 🟡 receiver wired (`prompt-recert.yml`); needs one-time Langfuse automation config; sync-to-repo still open |
 
 ---

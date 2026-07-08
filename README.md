@@ -248,10 +248,25 @@ Options:
   --tags TAG [TAG ...]   Filter traces by tags
   --trace-name NAME      Filter traces by name
   --limit N              Max traces to process (default: 100)
+  --queue-violations     Route flagged traces to the human-review queue (feedback edge)
   --dry-run              Preview without posting scores
 ```
 
 Exits with code 1 if compliance violations are detected, enabling integration with alerting systems.
+
+### `promote_trace_to_dataset.py` - Feedback Loop (trace → golden dataset)
+
+Closes the observation → development feedback edge of the [AI Engineering Loop](docs/ai-engineering-loop.md): promotes a flagged/reviewed production trace into a golden dataset item so the next certification run regression-tests it. Human-gated — it captures the trace *input* but leaves the correct answer to a reviewer (or `--expected`), never copying the suspect trace output as ground truth. Idempotent (item id `prod-<traceId>`, linked via `source_trace_id`).
+
+```
+Options:
+  --dataset NAME         Target dataset (required, e.g. certification/financebench-sample)
+  --trace-id ID          Trace to promote (repeatable)
+  --from-queue           Promote every trace in the "Certification Review" queue
+  --expected TEXT        Correct answer to store (else flagged needs_expected_review)
+  --note TEXT            Optional note stored in item metadata
+  --dry-run              Preview without creating items
+```
 
 ### `run_certification.py` - Experiment Runner
 

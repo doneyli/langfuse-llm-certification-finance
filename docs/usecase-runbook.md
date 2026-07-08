@@ -106,6 +106,29 @@ Export a compliance report:
 uv run python export_results.py --dataset certification/financebench-sample
 ```
 
+### Close the loop — promote a production failure into golden data
+
+The observation → development feedback edge (see
+[`ai-engineering-loop.md` → Edge A](ai-engineering-loop.md#closing-the-loop-what-is-wired-vs-open)):
+
+```bash
+# 1) Monitor flags live compliance violations and routes them to the review queue
+uv run python monitor_production.py --hours 24 --tags production --queue-violations
+
+# 2) A human reviews the queued traces in Langfuse (Annotation Queues → Certification
+#    Review) and decides the correct answer.
+
+# 3) Promote a reviewed trace into the golden dataset (human-gated: supply the
+#    correct answer, or leave it flagged needs_expected_review to fill in the UI)
+uv run python promote_trace_to_dataset.py \
+    --dataset certification/financebench-sample \
+    --from-queue --expected "The FY2019 fixed asset turnover is 24.26"
+
+# 4) Re-certify — the next run now regression-tests that real scenario
+uv run python run_usecase_certification.py --use-case 10k-analyst \
+    --dataset certification/financebench-sample --ci
+```
+
 ---
 
 ## 6. Demo script (the 5-minute story)

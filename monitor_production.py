@@ -36,6 +36,7 @@ from evaluators import (
     regulatory_compliance_evaluator,
     response_completeness_evaluator,
 )
+from cert_common import queue_trace_ids
 
 
 # --------------- API Helpers ---------------
@@ -154,6 +155,10 @@ def parse_args():
                         help="Max traces to process (default: 100)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview evaluation without posting scores")
+    parser.add_argument("--queue-violations", action="store_true",
+                        help="Route traces with a compliance violation to the "
+                             "'Certification Review' annotation queue for human "
+                             "review (the Monitor -> human-review feedback edge)")
     return parser.parse_args()
 
 
@@ -202,6 +207,7 @@ def main():
     # Evaluate and score
     scored = 0
     violations = 0
+    violation_trace_ids = []
     for trace in unscored:
         evaluations = evaluate_trace(trace)
         if not evaluations:
@@ -228,6 +234,7 @@ def main():
             # Track violations
             if ev.name == "regulatory_compliance" and ev.value == 0.0:
                 violations += 1
+                violation_trace_ids.append(trace["id"])
                 trace_url = trace.get("htmlPath", f"{host}/trace/{trace['id']}")
                 print(f"  VIOLATION: {ev.comment}", file=sys.stderr)
                 print(f"    Trace: {trace_url}", file=sys.stderr)
@@ -238,6 +245,15 @@ def main():
     print(f"\n{'=' * 50}", file=sys.stderr)
     print(f"  Scored:     {scored} traces", file=sys.stderr)
     print(f"  Violations: {violations}", file=sys.stderr)
+
+    # Feedback edge: route flagged traces to the human-review queue so a real
+    # failure can later be promoted into the golden dataset
+    # (see promote_trace_to_dataset.py). Deliberately opt-in via --queue-violations.
+    if args.queue_violations and violation_trace_ids and not args.dry_run:
+        queue_trace_ids(violation_trace_ids)
+    elif args.queue_violations and violation_trace_ids and args.dry_run:
+        print(f"  [dry-run] would queue {len(violation_trace_ids)} trace(s) "
+              f"for human review", file=sys.stderr)
 
     if violations > 0:
         print(f"\n  WARNING: {violations} compliance violation(s) detected!",
