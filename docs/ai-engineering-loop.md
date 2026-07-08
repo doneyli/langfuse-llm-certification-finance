@@ -49,7 +49,7 @@ and experimentation are required instead."* That is why this is a loop.
         │            │   monitor_production.py · UI LLM-as-judge
         └─────┬──────┘
               │  ┌─────────────────────────────────────────────┐
-              │  │  FEEDBACK EDGE (wired, human-gated — §Close)  │
+              │  │  FEEDBACK EDGE (implemented — see §Close)     │
               │  │  a surfaced failure should become golden data │
               ▼  ▼
         ┌────────────────┐   real failures + designed edge cases
@@ -72,9 +72,11 @@ and experimentation are required instead."* That is why this is a loop.
                                the GitHub-integration edge — see §CI/CD)
 ```
 
-Two edges *close* the loop, and both are now wired (see
+Two edges *close* the loop, and both are now implemented and offline-tested (see
 [Closing the loop](#closing-the-loop-what-is-wired-vs-open)) — Edge A human-gated
-by design, Edge B pending a one-time Langfuse-side config. Everything **inside** the
+by design, Edge B pending a one-time Langfuse-side config. Neither has been
+exercised against a live Langfuse yet (that first run is the
+[activation checklist](loop-activation-checklist.md)). Everything **inside** the
 cycle runs today on `main` (all three agents assembled — see
 [Demoing this](#demoing-this)).
 
@@ -203,15 +205,18 @@ of gating the use case rather than scoring the model.
 ## Closing the loop: what is wired vs open
 
 The stages above all run today. What makes it a *loop* is the two edges that feed
-the output of one cycle into the input of the next. Both are now wired — each with
-an honest caveat about what remains manual:
+the output of one cycle into the input of the next. Both are now implemented and
+offline-tested — but **not yet exercised end-to-end against a live Langfuse**;
+running the [activation checklist](loop-activation-checklist.md) §4 (or promoting a
+prompt) is the first live run that earns a "verified". Each also has an honest
+caveat about what remains manual:
 
-### Edge A — Observation → Development (Monitor → Build Datasets) · *wired (human-gated)*
+### Edge A — Observation → Development (Monitor → Build Datasets) · *implemented (human-gated); pending first live run*
 
 **The loop's promise:** a failure surfaced in production becomes a repeatable test
 case, so you never regress on it again.
 
-**What's wired — the full chain:**
+**What's implemented — the full chain** (offline-tested; first live run pending):
 
 ```
 monitor_production.py --queue-violations   →  flagged live trace → review queue
@@ -244,7 +249,7 @@ control for a regulated use case.
 **Still open:** a *one-click* UI promotion (annotate → add to dataset without the
 CLI) is not built; the promotion is a deliberate CLI step.
 
-### Edge B — Ship → Re-certify (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *receiver wired; needs Langfuse config*
+### Edge B — Ship → Re-certify (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *receiver implemented; needs Langfuse config + first live dispatch*
 
 This is the *"is the GitHub integration part of a true CI/CD pipe?"* question, and
 the answer is **yes — it is exactly the mechanism that turns prompt promotion into
@@ -290,7 +295,8 @@ prompt change, not just on a code push.
   `cert_common.get_managed_prompt`).
 - ✅ A CI gate exists: `run_usecase_certification.py --ci` exits non-zero on gate
   FAIL, and `.github/workflows/certification.yml` runs certification in Actions.
-- ✅ **`repository_dispatch` receiver wired.** `.github/workflows/prompt-recert.yml`
+- ✅ **`repository_dispatch` receiver implemented** (offline-tested; first live
+  dispatch pending). `.github/workflows/prompt-recert.yml`
   listens for `repository_dispatch` (`event_type: langfuse-prompt-update`), maps the
   changed prompt to its use-case / model target (`scripts/recert_for_prompt.py`),
   and re-runs the gate with `--ci`. It dedups Langfuse's double-dispatch by acting
@@ -300,7 +306,8 @@ prompt change, not just on a code push.
 - 🟡 **One-time Langfuse config to activate.** Create the matching automation in
   **Prompts → Automations → GitHub Repository Dispatch** (event type
   `langfuse-prompt-update`, a GitHub PAT with `actions` read/write) — UI + secret,
-  not code. Until then the receiver simply never fires.
+  not code. Until then the receiver simply never fires. Step-by-step in the
+  [activation checklist](loop-activation-checklist.md) (§3).
 - ⬜ **Sync-to-Repo webhook** (the git audit archive of prompt versions) is not set
   up — that path needs a small webhook server (see the Langfuse docs).
 
@@ -310,11 +317,11 @@ prompt change, not just on a code push.
 |---|---|---|
 | 1 Trace | Observations (nested spans) | ✅ wired — all 3 agents |
 | 2 Monitor | Scores on live traces + online judge + queues | ✅ wired (`monitor_production.py`) |
-| 3 Build Datasets | Datasets + items | ✅ wired — designed + adversarial + real-failure promotion (`promote_trace_to_dataset.py`, Edge A) |
+| 3 Build Datasets | Datasets + items | ✅ designed + adversarial wired; real-failure promotion implemented (`promote_trace_to_dataset.py`, Edge A — pending first live run) |
 | 4 Experiment | Experiments; prompt versions | ✅ wired (model / prompt / threshold comparisons) |
 | 5 Evaluate | Scores + multi-dim gate | ✅ wired (`usecase_certification_gate`) |
-| **A** Monitor → Dataset | `--queue-violations` → review → `promote_trace_to_dataset.py` | ✅ wired (human-gated); one-click UI promotion still open |
-| **B** Prompt promote → re-cert | GitHub `repository_dispatch` + sync webhook | 🟡 receiver wired (`prompt-recert.yml`); needs one-time Langfuse automation config; sync-to-repo still open |
+| **A** Monitor → Dataset | `--queue-violations` → review → `promote_trace_to_dataset.py` | ✅ implemented + offline-tested (human-gated); pending first live run; one-click UI promotion open |
+| **B** Prompt promote → re-cert | GitHub `repository_dispatch` + sync webhook | 🟡 receiver implemented + offline-tested (`prompt-recert.yml`); needs one-time Langfuse config + first live dispatch; sync-to-repo open |
 
 ---
 
@@ -337,8 +344,10 @@ narration:
    accurate, but one prohibited phrase → compliance < 100% → **gate FAILS**.
    *Accurate but uncertifiable.*
 5. **Monitor + close the loop** — point at `monitor_production.py` on live traffic,
-   then name the two open edges above as the "make it continuous / make it CI/CD"
-   next steps.
+   then show both feedback edges: a flagged trace → `promote_trace_to_dataset.py` →
+   golden data (Edge A), and a prompt promotion → auto re-certification (Edge B).
+   Both are implemented; activating them (and the first live run) is a one-time
+   console step ([activation checklist](loop-activation-checklist.md)).
 
 ## How this doc relates to the others
 
@@ -348,3 +357,4 @@ narration:
 | [`usecase-architecture.md`](usecase-architecture.md) | *What are the components and where does each live?* |
 | [`usecase-certification.md`](usecase-certification.md) | *How is each agent implemented?* |
 | [`usecase-runbook.md`](usecase-runbook.md) | *How do I run and demo it?* |
+| [`loop-activation-checklist.md`](loop-activation-checklist.md) | *What one-time console/config turns the feedback edges on?* |
