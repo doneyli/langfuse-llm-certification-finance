@@ -1,11 +1,12 @@
 # Use-Case Certification — Architecture & Eval Lifecycle
 
-Companion to [`usecase-certification.md`](usecase-certification.md) (the
+Companion to [`ai-engineering-loop.md`](ai-engineering-loop.md) (the objective /
+loop story), [`usecase-certification.md`](usecase-certification.md) (the
 implementation spec) and [`usecase-runbook.md`](usecase-runbook.md) (how to run
 it). This document shows the architecture and maps every stage of the evaluation
-lifecycle to the Langfuse primitive and the file that owns it — and marks what is
-**wired** today (PR #12, issue #8) vs the three agents now **implemented** in open
-PRs — #9 (PR #13), #10 (PR #14), #11 (PR #15).
+lifecycle to the Langfuse primitive and the file that owns it. The foundation
+(PR #12, issue #8) and all three agents — #9 (PR #13), #10 (PR #14), #11 (PR #15) —
+are now merged to `main`.
 
 ---
 

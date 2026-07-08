@@ -6,8 +6,9 @@
 > certified only if the **whole system** clears every production-readiness bar at
 > once — not just "did the model get the number right."
 
-**Related docs:** [`usecase-architecture.md`](usecase-architecture.md) (architecture
-+ eval-lifecycle component map) · [`usecase-runbook.md`](usecase-runbook.md)
+**Related docs:** [`ai-engineering-loop.md`](ai-engineering-loop.md) (the objective
++ how it forms Langfuse's AI Engineering Loop) · [`usecase-architecture.md`](usecase-architecture.md)
+(architecture + eval-lifecycle component map) · [`usecase-runbook.md`](usecase-runbook.md)
 (runbook + demo narration) · [`../scripts/demo_usecase.sh`](../scripts/demo_usecase.sh)
 (runnable demo scaffold).
 

@@ -590,8 +590,9 @@ bash scripts/demo_usecase.sh                                 # full-lifecycle de
 ```
 
 The shared foundation (multi-dimensional gate, trajectory evaluator, agent
-registry, tracing helpers) ships first; the agents land incrementally. See:
+registry, tracing helpers) plus all three agents are on `main`. See:
 
+- [`docs/ai-engineering-loop.md`](docs/ai-engineering-loop.md) — **the objective**: how this use case forms Langfuse's [AI Engineering Loop](https://langfuse.com/academy/ai-engineering-loop) (Trace → Monitor → Build Datasets → Experiment → Evaluate) end to end, and the CI/CD-for-prompts story
 - [`docs/usecase-certification.md`](docs/usecase-certification.md) — implementation spec (3 agents)
 - [`docs/usecase-architecture.md`](docs/usecase-architecture.md) — architecture + eval-lifecycle component map
 - [`docs/usecase-runbook.md`](docs/usecase-runbook.md) — runbook + demo narration

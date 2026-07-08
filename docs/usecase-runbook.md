@@ -2,16 +2,14 @@
 
 Operational runbook for certifying a **use case** (agent) end-to-end, and the
 script for demoing it. Pairs with
+[`ai-engineering-loop.md`](ai-engineering-loop.md) (the objective / loop story),
 [`usecase-architecture.md`](usecase-architecture.md) (the lifecycle map) and
 [`usecase-certification.md`](usecase-certification.md) (the spec).
 
-> **Status (PR #12 / issue #8):** the shared **foundation** is in place — runner,
-> multi-dimensional gate, trajectory evaluator, score configs, prompt templates,
-> `cert_common` plumbing. The **agents themselves are pending** (#9 10k-analyst,
-> #10 sentiment-triage, #11 advisory-draft). Steps below are marked **[now]** if
-> they work today or **[needs #9]** if they require the first agent. The demo
-> script (`scripts/demo_usecase.sh`) prints loud `PENDING` markers where an agent
-> is not yet implemented, so it never silently looks like it succeeded.
+> **Status:** the shared foundation **and** all three agents (10k-analyst #9,
+> sentiment-triage #10, advisory-draft #11) are on `main` and verified together —
+> `run_usecase_certification.py --list` shows all three `[registered]` and the 52
+> offline unit tests pass. Every step below works today.
 
 ---
 
@@ -62,12 +60,13 @@ uv run python setup_annotation_queues.py
 uv run python run_usecase_certification.py --list
 ```
 
-Today every use case prints `[pending]` until its agent module lands. Once #9 is
-merged, `10k-analyst` flips to `[registered]` with its gate dimensions shown.
+All three use cases print `[registered]` with their gate dimensions. (On a branch
+where an agent module is absent, that use case prints `[pending]` instead — the
+foundation tolerates missing agents.)
 
 ---
 
-## 4. Certify a use case  [needs #9 for a real run]
+## 4. Certify a use case  [now]
 
 ```bash
 uv run python run_usecase_certification.py \
@@ -77,8 +76,7 @@ uv run python run_usecase_certification.py \
     --queue-failures
 ```
 
-Until #9 lands this exits 1 with guidance (foundation present, agent pending) —
-intended. After #9:
+This performs the run:
 
 1. The agent runs once per item, emitting a nested trace
    (plan → retrieve → calculate → compose).
@@ -112,15 +110,20 @@ uv run python export_results.py --dataset certification/financebench-sample
 
 ## 6. Demo script (the 5-minute story)
 
-`scripts/demo_usecase.sh` walks the full lifecycle. It runs setup, lists use
-cases, and attempts the certification run — printing a loud `PENDING #9` banner
-if the agent is not yet implemented rather than pretending to succeed.
+`scripts/demo_usecase.sh` walks the full lifecycle: setup, lists use cases, and
+runs the certification. (If run on a branch where the chosen agent is absent it
+prints a loud `PENDING` banner rather than pretending to succeed — on `main` all
+three run.)
 
 ```bash
 bash scripts/demo_usecase.sh
 ```
 
-**Narration when demoing live (after #9):**
+> For the **loop-shaped** version of this narration (framed as Trace → Monitor →
+> Build Datasets → Experiment → Evaluate), see
+> [`ai-engineering-loop.md` → Demoing this](ai-engineering-loop.md#demoing-this).
+
+**Narration when demoing live:**
 
 1. **Reframe** — "We're not certifying a model; we're certifying a *use case* —
    this 10-K analyst agent, as a whole system."
@@ -160,7 +163,7 @@ bash scripts/demo_usecase.sh
 | Run hangs near the tail on local Langfuse | OTel queue saturation — same as model cert; the runner sets safe OTel defaults. See README "Hangs on long runs". |
 | `certification_result` shows a dimension at 0% you didn't expect | a gate dimension had **no** item scores (averages to 0 → fails). Confirm the evaluator for that dimension is in the agent's `ITEM_EVALUATORS`. |
 | Agent trace has no nested spans | the span-nesting assumption (architecture §5) — verify `start_as_current_observation` nests inside `run_experiment`; thread `trace_context` if not. |
-| `--use-case X is not implemented yet` | expected pre-#9/#10/#11; the foundation is present, the agent is not. |
+| `--use-case X is not implemented yet` | you are on a branch where that agent module is absent; on `main` all three are present. |
 
 ---
 
