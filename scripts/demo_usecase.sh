@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# Use-Case Certification — end-to-end demo / runbook scaffold.
+# Use-Case Certification — end-to-end demo / runbook.
 #
 # Walks the full eval lifecycle: datasets -> prompts -> score configs ->
 # annotation queues -> use-case certification run -> where to inspect results.
 #
-# This is a SCAFFOLD: the agents land in issues #9/#10/#11. Where an agent is not
-# yet implemented, the script prints a loud PENDING banner instead of silently
-# skipping — a demo that quietly does nothing must not read as success.
+# All three use-case agents (10k-analyst, sentiment-triage, advisory-draft)
+# are implemented and registered; pick one via USE_CASE below.
 #
 # Usage:
 #   bash scripts/demo_usecase.sh                 # default: 10k-analyst on financebench-sample
@@ -23,7 +22,6 @@ MODEL="${MODEL:-claude-sonnet-4-6}"
 
 RUN() { echo; echo "▶ $*"; "$@"; }
 banner() { echo; echo "════════════════════════════════════════════════════════════"; echo "  $*"; echo "════════════════════════════════════════════════════════════"; }
-pending() { echo; echo "⚠️  PENDING ───────────────────────────────────────────────"; echo "    $*"; echo "───────────────────────────────────────────────────────────"; }
 
 cd "$(dirname "$0")/.."
 
@@ -85,10 +83,8 @@ if uv run python run_usecase_certification.py \
   echo "   • certification_result score comment → per-dimension PASS/FAIL"
   echo "   • Portal (/) → row 'usecase:$USE_CASE' → PASS/FAIL badge"
 else
-  pending "Agent '$USE_CASE' is not implemented yet (foundation #8 is in place).
-    Implement it in the matching issue, then re-run this demo:
-      10k-analyst → #9   sentiment-triage → #10   advisory-draft → #11
-    Everything above this line (datasets, prompts, scores, queue, --list) is live now."
+  echo
+  echo "❌ Certification run failed for use case '$USE_CASE' — see output above."
 fi
 
 banner "Demo complete"

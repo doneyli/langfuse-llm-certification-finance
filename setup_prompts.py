@@ -70,10 +70,8 @@ PROMPTS = [
     # Use-case (agent) certification prompts. Each agent step fetches its
     # production-labelled template via cert_common.get_managed_prompt(), so the
     # multi-step agents share the same edit/version/promote lifecycle as the
-    # model-cert prompts above. Agents land in issues #9 (10k-analyst),
-    # #10 (sentiment-triage), #11 (advisory-draft); these templates are
-    # registered by the foundation so prompt management is wired before the
-    # agents run. See docs/usecase-certification.md.
+    # model-cert prompts above. The agents live in agents/ (10k-analyst,
+    # sentiment-triage, advisory-draft). See docs/usecase-certification.md.
     # ---------------------------------------------------------------------
     # Note: the 10-K Analyst's PLAN and EXTRACT steps emit JSON the agent parses,
     # so their prompts are code-owned (in agents/financial_analyst.py) to keep

@@ -20,13 +20,11 @@ Usage:
 Environment variables:
     LANGFUSE_PUBLIC_KEY  (required)
     LANGFUSE_SECRET_KEY  (required)
-    LANGFUSE_BASE_URL    (default: https://cloud.langfuse.com)
+    LANGFUSE_BASE_URL    (falls back to LANGFUSE_HOST, then https://cloud.langfuse.com)
 """
 
 import argparse
-import base64
 import json
-import os
 import sys
 import urllib.request
 import urllib.error
@@ -36,17 +34,15 @@ from evaluators import (
     regulatory_compliance_evaluator,
     response_completeness_evaluator,
 )
-from cert_common import queue_trace_ids
+from cert_common import langfuse_creds, queue_trace_ids
 
 
 # --------------- API Helpers ---------------
 
 def _get_auth():
-    host = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
-    pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-    sk = os.getenv("LANGFUSE_SECRET_KEY", "")
-    auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
-    return host, auth
+    # Delegate to the shared helper so this script honors the same
+    # LANGFUSE_BASE_URL -> LANGFUSE_HOST fallback as the rest of the repo.
+    return langfuse_creds()
 
 
 def _api_get(host, auth, path):

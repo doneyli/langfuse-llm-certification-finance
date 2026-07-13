@@ -20,6 +20,9 @@ on:
       - 'evaluators.py'
       - 'run_certification.py'
       - 'setup_prompts.py'
+      - 'agents/**'
+      - 'run_usecase_certification.py'
+      - 'cert_common.py'
       - 'pyproject.toml'
       - 'uv.lock'
       - '.python-version'
@@ -74,11 +77,32 @@ jobs:
             --threshold ${{ github.event.inputs.threshold || '0.85' }} \
             --ci
 
+  certify-usecase:
+    name: 10-K Analyst Use-Case Certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+      - name: Run 10-K analyst use-case certification
+        run: |
+          uv run python run_usecase_certification.py \
+            --use-case 10k-analyst \
+            --dataset certification/financebench-sample \
+            --model ${{ github.event.inputs.model || 'claude-sonnet-4-6' }} \
+            --ci
+
   pytest-gate:
     name: Pytest Certification Gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [certify-financebench, certify-fpb]
+    needs: [certify-financebench, certify-fpb, certify-usecase]
     if: always()
 
     steps:
