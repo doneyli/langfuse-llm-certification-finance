@@ -1,10 +1,15 @@
-# LLM Certification for Financial Services
+# LLM & Use-Case Certification for Financial Services
 
-Automated LLM model certification pipeline using [Langfuse](https://langfuse.com) experiments and open-source financial evaluation datasets. Powered by [ClickHouse](https://clickhouse.com) as the analytics backend.
+Automated certification pipeline for LLM **models** and agent **use cases**, built on [Langfuse](https://langfuse.com) experiments and open-source financial evaluation datasets. Powered by [ClickHouse](https://clickhouse.com) as the analytics backend.
 
-**The problem:** Certifying a new LLM (e.g., Claude Sonnet 4.6, GPT-4o) for use in financial services takes weeks of manual testing - sending prompts, collecting responses, scoring accuracy, writing compliance reports. Model risk management teams need standardized, reproducible evidence before approving models for production. And certification isn't one-and-done: prompts get promoted, models get swapped, and production traffic drifts — the evidence has to stay current.
+**The problem:** Model risk management teams don't approve raw models — they approve *use cases*: a 10-K analysis assistant, a sentiment triage pipeline, a client-advisory drafting tool. Certifying either a new LLM (e.g., Claude Sonnet 4.6, GPT-4o) or a whole agent for use in financial services takes weeks of manual testing — sending prompts, collecting responses, scoring accuracy, writing compliance reports. And certification isn't one-and-done: prompts get promoted, models get swapped, and production traffic drifts — the evidence has to stay current.
 
-**This pipeline:** Load golden financial datasets into Langfuse, run them against any model — or against a multi-step **agent**, for [use-case certification](#use-case-certification-agents) — through a single command, automatically score with financial evaluators, and export results for compliance reports. What took 2 weeks becomes 1 day.
+**This pipeline:** Load golden financial datasets into Langfuse, run them through a single command, automatically score with financial evaluators, and export results for compliance reports. What took 2 weeks becomes 1 day. Two certification modes ship out of the box:
+
+| Mode | Entry point | What passes the gate | Ships with |
+|---|---|---|---|
+| **Model certification** | `run_certification.py` | one LLM call per item; primary accuracy score ≥ threshold | any OpenAI-compatible endpoint or Claude model |
+| **[Use-case certification](#use-case-certification-agents)** | `run_usecase_certification.py` | a multi-step **agent** per item; **every** gate dimension must pass (accuracy, groundedness, compliance, tool use…) | three registered agents: **`10k-analyst`** (SEC-filing QA with a calculator tool), **`sentiment-triage`** (classification with human routing), **`advisory-draft`** (compliance-gated client prose) |
 
 **The loop:** The pieces form Langfuse's [AI Engineering Loop](docs/ai-engineering-loop.md) (Trace → Monitor → Build Datasets → Experiment → Evaluate) end to end: production failures are promoted back into golden datasets, and promoting a prompt in Langfuse automatically re-runs the affected certification in CI.
 
@@ -159,34 +164,49 @@ uv run python setup_annotation_queues.py    # Create human review queue
 uv run python setup_prompts.py              # Register prompt templates
 ```
 
-### 4. Run Certification
+### 4. Certify a Model
 
 ```bash
 uv run python run_certification.py --dataset certification/financebench-sample \
   --model claude-sonnet-4-6 --queue-failures
 ```
 
-### 5. Build the Portal Frontend
+### 5. Certify a Use Case (Agent)
+
+Certify a whole agent, not just a model. The 10-K Filing Analyst plans, retrieves
+evidence, calls a calculator tool, and composes a grounded answer — and passes
+only if accuracy **and** groundedness **and** compliance **and** tool use all
+clear their bars (see [Use-Case Certification](#use-case-certification-agents)):
+
+```bash
+uv run python run_usecase_certification.py --list    # 10k-analyst, sentiment-triage, advisory-draft
+uv run python run_usecase_certification.py --use-case 10k-analyst \
+  --dataset certification/financebench-sample --queue-failures
+```
+
+### 6. Build the Portal Frontend
 
 ```bash
 cd portal/frontend && npm install && npm run build && cd ../..
 ```
 
-### 6. Launch the Portal
+### 7. Launch the Portal
 
 ```bash
 uv run python -m portal.app    # Opens on http://localhost:8050
 ```
 
-### 7. View Results
+### 8. View Results
 
-Open `http://localhost:8050` for the Certification Dashboard, or Langfuse UI > **Datasets** > `certification/financebench-sample` > **Runs**
+Open `http://localhost:8050` for the Certification Dashboard — the model and the
+agent appear as separate rows (`claude-sonnet-4-6` and `usecase:10k-analyst`) —
+or Langfuse UI > **Datasets** > `certification/financebench-sample` > **Runs**
 
-### 8. Review Failed Items
+### 9. Review Failed Items
 
 Open your Langfuse UI > **Annotation Queues** > `Certification Review` to review items that failed automated evaluation.
 
-### 9. Export Report
+### 10. Export Report
 
 ```bash
 uv run python export_results.py --dataset certification/financebench-sample
@@ -201,6 +221,69 @@ To load all 150 FinanceBench items from HuggingFace (requires internet):
 uv run python setup_datasets.py --dataset financebench        # Downloads from HuggingFace
 uv run python run_certification.py --dataset certification/financebench-v1 --model gpt-4o
 ```
+
+## Use-Case Certification (Agents)
+
+Beyond certifying *models*, the pipeline can certify *use cases* — multi-step
+**agents** deployed for a specific business purpose. A use case is certified only
+if the **whole system** clears every production-readiness bar for that use case at
+once — a **multi-dimensional gate** where every dimension must pass, not just a
+single accuracy score.
+
+| | Model certification | Use-case certification |
+|---|---|---|
+| Entry point | `run_certification.py` | `run_usecase_certification.py` |
+| `task` | one LLM call | a multi-span **agent** |
+| Trace | flat | nested (one span per agent step) |
+| Gate | one score ≥ threshold | **multi-dimensional**, all must pass |
+| Dashboard row | model name | `usecase:<name>` |
+| Models | any OpenAI-compatible endpoint or Claude | Claude only (agents call the native Anthropic SDK) |
+
+**The three registered use cases** — each defines its own trace shape and gate
+(dimensions and thresholds live in the agent registry, not in a CLI flag):
+
+| Use case | Agent steps (spans) | Gate — all must pass |
+|----------|--------------------|----------------------|
+| `10k-analyst` — grounded SEC-filing QA with a calculator tool | plan → retrieve-evidence → calculate (tool) → compose-answer | numerical_accuracy ≥ 0.85, groundedness ≥ 0.80, regulatory_compliance = 1.00, tool_use_correctness ≥ 0.90 |
+| `sentiment-triage` — classify sentiment, route low-confidence items to a human | classify → rationale → route (tool) | sentiment_accuracy ≥ 0.85, regulatory_compliance = 1.00, tool_use_correctness = 1.00 |
+| `advisory-draft` — grounded client summary with a hard compliance gate | analyze → draft → compliance-self-check (tool) | groundedness ≥ 0.80, regulatory_compliance = 1.00, completeness ≥ 0.70, tool_use_correctness = 1.00 |
+
+Note how the gates differ per use case: `sentiment-triage` has no groundedness
+dimension (no source documents to be faithful to), and `advisory-draft` has no
+accuracy dimension at all — it gates on grounded, complete, *compliant* prose.
+`regulatory_compliance = 1.00` is a hard gate everywhere: one prohibited phrase
+fails the entire certification.
+
+```bash
+uv run python run_usecase_certification.py --list           # show use cases
+uv run python run_usecase_certification.py --use-case 10k-analyst \
+    --dataset certification/financebench-sample --model claude-sonnet-4-6
+bash scripts/demo_usecase.sh                                 # full-lifecycle demo
+```
+
+```
+Options:
+  --list                        List registered use cases and exit
+  --use-case {10k-analyst,sentiment-triage,advisory-draft}
+                                Which use case to certify (required unless --list)
+  --dataset DATASET             Langfuse dataset name (required unless --list)
+  --model MODEL                 Base Claude model for the agent (default: claude-sonnet-4-6)
+  --max-concurrency N           Concurrent items (default: 5)
+  --run-name NAME               Custom experiment run name (default: auto-generated)
+  --queue-failures              Route failed items to the annotation queue
+  --ci                          Exit 1 unless every gate dimension passes (for CI)
+  --dry-run                     Preview dataset items only
+```
+
+The shared foundation (multi-dimensional gate, trajectory evaluator, agent
+registry, tracing helpers) plus all three agents are on `main`. See:
+
+- [`docs/ai-engineering-loop.md`](docs/ai-engineering-loop.md) — **the objective**: how this use case forms Langfuse's [AI Engineering Loop](https://langfuse.com/academy/ai-engineering-loop) (Trace → Monitor → Build Datasets → Experiment → Evaluate) end to end, and the CI/CD-for-prompts story
+- [`docs/loop-activation-checklist.md`](docs/loop-activation-checklist.md) — one-time console/config to turn the feedback edges on (Langfuse automations, GitHub secrets/PAT)
+- [`docs/usecase-certification.md`](docs/usecase-certification.md) — implementation spec (3 agents)
+- [`docs/usecase-architecture.md`](docs/usecase-architecture.md) — architecture + eval-lifecycle component map
+- [`docs/usecase-runbook.md`](docs/usecase-runbook.md) — runbook + demo narration
+- [`docs/hosting-demo.md`](docs/hosting-demo.md) — plan for hosting a public read-only demo (Vercel + Langfuse Cloud; designed, not yet executed)
 
 ## Components
 
@@ -393,6 +476,13 @@ LANGFUSE_FLUSH_INTERVAL=2
 ```
 
 The hang does not occur against Langfuse Cloud (faster ingestion). Only seen against a local self-hosted Langfuse with the full 150-item FinanceBench dataset and a CoT-heavy system prompt.
+
+### `run_usecase_certification.py` - Use-Case (Agent) Experiment Runner
+
+Runs a Langfuse dataset through a registered multi-step **agent** (nested trace,
+one span per step) and applies that use case's **multi-dimensional gate** — every
+dimension must pass. Options, the three registered agents, and their gates are
+documented in [Use-Case Certification (Agents)](#use-case-certification-agents).
 
 ### `evaluators.py` - Financial Evaluators
 
@@ -678,69 +768,6 @@ The [Open FinLLM Leaderboard](https://huggingface.co/spaces/TheFinAI/Open-Financ
 | Credit Risk (Taiwan) | Credit risk assessment | `TheFinAI/cra-taiwan` |
 | TATQA | Table + text hybrid QA | `ChanceFocus/flare-tatqa` |
 
-## Use-Case Certification (Agents)
-
-Beyond certifying *models*, the pipeline can certify *use cases* — multi-step
-**agents** deployed for a specific business purpose. A use case is certified only
-if the **whole system** clears every production-readiness bar for that use case at
-once — a **multi-dimensional gate** where every dimension must pass, not just a
-single accuracy score.
-
-| | Model certification | Use-case certification |
-|---|---|---|
-| Entry point | `run_certification.py` | `run_usecase_certification.py` |
-| `task` | one LLM call | a multi-span **agent** |
-| Trace | flat | nested (one span per agent step) |
-| Gate | one score ≥ threshold | **multi-dimensional**, all must pass |
-| Dashboard row | model name | `usecase:<name>` |
-| Models | any OpenAI-compatible endpoint or Claude | Claude only (agents call the native Anthropic SDK) |
-
-**The three registered use cases** — each defines its own trace shape and gate
-(dimensions and thresholds live in the agent registry, not in a CLI flag):
-
-| Use case | Agent steps (spans) | Gate — all must pass |
-|----------|--------------------|----------------------|
-| `10k-analyst` — grounded SEC-filing QA with a calculator tool | plan → retrieve-evidence → calculate (tool) → compose-answer | numerical_accuracy ≥ 0.85, groundedness ≥ 0.80, regulatory_compliance = 1.00, tool_use_correctness ≥ 0.90 |
-| `sentiment-triage` — classify sentiment, route low-confidence items to a human | classify → rationale → route (tool) | sentiment_accuracy ≥ 0.85, regulatory_compliance = 1.00, tool_use_correctness = 1.00 |
-| `advisory-draft` — grounded client summary with a hard compliance gate | analyze → draft → compliance-self-check (tool) | groundedness ≥ 0.80, regulatory_compliance = 1.00, completeness ≥ 0.70, tool_use_correctness = 1.00 |
-
-Note how the gates differ per use case: `sentiment-triage` has no groundedness
-dimension (no source documents to be faithful to), and `advisory-draft` has no
-accuracy dimension at all — it gates on grounded, complete, *compliant* prose.
-`regulatory_compliance = 1.00` is a hard gate everywhere: one prohibited phrase
-fails the entire certification.
-
-```bash
-uv run python run_usecase_certification.py --list           # show use cases
-uv run python run_usecase_certification.py --use-case 10k-analyst \
-    --dataset certification/financebench-sample --model claude-sonnet-4-6
-bash scripts/demo_usecase.sh                                 # full-lifecycle demo
-```
-
-```
-Options:
-  --list                        List registered use cases and exit
-  --use-case {10k-analyst,sentiment-triage,advisory-draft}
-                                Which use case to certify (required unless --list)
-  --dataset DATASET             Langfuse dataset name (required unless --list)
-  --model MODEL                 Base Claude model for the agent (default: claude-sonnet-4-6)
-  --max-concurrency N           Concurrent items (default: 5)
-  --run-name NAME               Custom experiment run name (default: auto-generated)
-  --queue-failures              Route failed items to the annotation queue
-  --ci                          Exit 1 unless every gate dimension passes (for CI)
-  --dry-run                     Preview dataset items only
-```
-
-The shared foundation (multi-dimensional gate, trajectory evaluator, agent
-registry, tracing helpers) plus all three agents are on `main`. See:
-
-- [`docs/ai-engineering-loop.md`](docs/ai-engineering-loop.md) — **the objective**: how this use case forms Langfuse's [AI Engineering Loop](https://langfuse.com/academy/ai-engineering-loop) (Trace → Monitor → Build Datasets → Experiment → Evaluate) end to end, and the CI/CD-for-prompts story
-- [`docs/loop-activation-checklist.md`](docs/loop-activation-checklist.md) — one-time console/config to turn the feedback edges on (Langfuse automations, GitHub secrets/PAT)
-- [`docs/usecase-certification.md`](docs/usecase-certification.md) — implementation spec (3 agents)
-- [`docs/usecase-architecture.md`](docs/usecase-architecture.md) — architecture + eval-lifecycle component map
-- [`docs/usecase-runbook.md`](docs/usecase-runbook.md) — runbook + demo narration
-- [`docs/hosting-demo.md`](docs/hosting-demo.md) — plan for hosting a public read-only demo (Vercel + Langfuse Cloud; designed, not yet executed)
-
 ## Certification Portal
 
 A web dashboard for business and compliance stakeholders to view certification status at a glance.
@@ -847,6 +874,10 @@ The OTel/Langfuse flush-tuning variables (`OTEL_BSP_*`, `LANGFUSE_FLUSH_*`) are 
 ### How does certification scoring work?
 
 The pipeline runs the model under test against every item in a Langfuse dataset, then scores each response with a set of evaluators. Scores are aggregated at the run level, and a **certification gate** checks whether the primary accuracy metric meets the configured threshold (default: 85%). The model either PASSES or FAILS. Use-case certification works the same way but with a **multi-dimensional gate**: every dimension registered for the use case (e.g. accuracy, groundedness, compliance, tool-use correctness) must clear its own threshold at once.
+
+### Can I certify a whole agent (use case), not just a model?
+
+Yes — that's [`run_usecase_certification.py`](#use-case-certification-agents). Three agents ship registered: `10k-analyst` (grounded SEC-filing QA with a calculator tool), `sentiment-triage` (sentiment classification with human routing), and `advisory-draft` (compliance-gated client prose). Each defines its own trace shape and multi-dimensional gate; on the dashboard they appear as `usecase:<name>` rows next to the plain model rows.
 
 ### Are the evaluators deterministic or LLM-based?
 
