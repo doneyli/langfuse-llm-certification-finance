@@ -1,5 +1,9 @@
 # Evaluation Pipeline Gaps & Roadmap
 
+> **Historical** — this roadmap predates use-case certification and the AI Engineering Loop
+> reframing; all gaps below are closed. Superseded by
+> [ai-engineering-loop.md](ai-engineering-loop.md). Kept for provenance.
+
 Identified gaps in the current LLM certification pipeline, with recommended actions based on [Langfuse documentation](https://langfuse.com/docs/evaluation/overview).
 
 > Status key: **Done** | **In Progress** | **Todo**
