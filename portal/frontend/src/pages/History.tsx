@@ -26,7 +26,7 @@ import StatusBadge from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { useChartTheme } from "../lib/chartTheme";
 import { datasetLabel } from "../lib/datasets";
-import { datetime, shortDate } from "../lib/format";
+import { datetime, metricLabel, shortDate } from "../lib/format";
 import type { HistoryRun } from "../types";
 
 const headers: TableColumnConfigProps[] = [
@@ -57,7 +57,22 @@ function tableRow(dataset: string, run: HistoryRun): TableRowType {
       { label: <span style={{ fontWeight: 600 }}>{run.model}</span> },
       { label: <StatusBadge status={run.status} /> },
       {
-        label: <ScoreBar value={run.primary_score} threshold={run.threshold} />,
+        label: (
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: 2 }}
+            title={run.primary_score.name ?? undefined}
+          >
+            <ScoreBar
+              value={run.primary_score.value}
+              threshold={run.threshold}
+            />
+            {run.primary_score.name && (
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                {metricLabel(run.primary_score.name)}
+              </span>
+            )}
+          </div>
+        ),
       },
       {
         label: (
@@ -112,11 +127,15 @@ export default function History() {
         {(runs) => {
           const chartData = [...runs]
             .reverse()
-            .filter((r) => r.primary_score !== null)
+            .filter((r) => r.primary_score.value !== null)
             .map((r) => ({
               date: shortDate(r.timestamp),
-              score: r.primary_score !== null ? r.primary_score * 100 : null,
+              score:
+                r.primary_score.value !== null
+                  ? r.primary_score.value * 100
+                  : null,
               model: r.model,
+              metric: metricLabel(r.primary_score.name),
             }));
 
           const threshold =
@@ -184,7 +203,11 @@ export default function History() {
                           }}
                           labelStyle={{ color: chart.tooltipText }}
                           itemStyle={{ color: chart.tooltipText }}
-                          formatter={(v: number) => [`${v.toFixed(1)}%`, "Score"]}
+                          formatter={(v: number, _name, item) => [
+                            `${v.toFixed(1)}%`,
+                            (item?.payload as { metric?: string })?.metric ||
+                              "Score",
+                          ]}
                         />
                         <Line
                           type="monotone"

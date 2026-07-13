@@ -18,7 +18,7 @@ import ScoreBar from "../components/ScoreBar";
 import StatusBadge from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { datasetLabel } from "../lib/datasets";
-import { shortDate } from "../lib/format";
+import { metricLabel, shortDate } from "../lib/format";
 import type { CertStatus, DashboardRow } from "../types";
 
 type Filter = "ALL" | CertStatus;
@@ -42,7 +42,20 @@ function tableRow(row: DashboardRow): TableRowType {
       { label: <StatusBadge status={row.status} /> },
       {
         label: (
-          <ScoreBar value={row.primary_score} threshold={row.threshold} />
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: 2 }}
+            title={row.primary_score.name ?? undefined}
+          >
+            <ScoreBar
+              value={row.primary_score.value}
+              threshold={row.threshold}
+            />
+            {row.primary_score.name && (
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                {metricLabel(row.primary_score.name)}
+              </span>
+            )}
+          </div>
         ),
       },
       {

@@ -25,6 +25,12 @@ export function pctRound(n: number | null | undefined): string {
   return `${Math.round(n * 100)}%`;
 }
 
+/** "avg_numerical_accuracy" → "numerical accuracy" (for secondary text). */
+export function metricLabel(name: string | null | undefined): string {
+  if (!name) return "";
+  return name.replace(/^avg_/, "").replace(/_/g, " ");
+}
+
 export function shortDate(ts: string | undefined): string {
   if (!ts) return "—";
   return ts.slice(0, 10);

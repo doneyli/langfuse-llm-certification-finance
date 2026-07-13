@@ -3,11 +3,14 @@ import { Link as RouterLink, useLocation } from "react-router-dom";
 import {
   SidebarNavigationItem,
   SidebarNavigationTitle,
+  Text,
 } from "@clickhouse/click-ui";
 
+import { api } from "../lib/api";
 import { useConfig } from "../lib/config";
-import { DATASETS } from "../lib/datasets";
+import { datasetIcon, datasetLabel } from "../lib/datasets";
 import { useAppTheme } from "../lib/theme";
+import { useAsync } from "./AsyncView";
 import ThemeToggle from "./ThemeToggle";
 
 interface Props {
@@ -17,6 +20,7 @@ interface Props {
 export default function AppShell({ children }: Props) {
   const { pathname } = useLocation();
   const { theme } = useAppTheme();
+  const datasetsState = useAsync(() => api.datasets(), []);
 
   const isDashboard = pathname === "/";
   const langfuseLogo =
@@ -69,23 +73,38 @@ export default function AppShell({ children }: Props) {
 
         <div className="sidebar-section">
           <SidebarNavigationTitle label="Datasets" />
-          {DATASETS.map((d) => {
-            const href = `/history/${d.slug}`;
-            const active = pathname.includes(`/${d.slug}`);
-            return (
-              <RouterLink
-                key={d.slug}
-                to={href}
-                style={{ textDecoration: "none" }}
-              >
-                <SidebarNavigationItem
-                  label={d.label}
-                  icon={d.kind === "numerical" ? "bar-chart" : "chat"}
-                  selected={active}
-                />
-              </RouterLink>
-            );
-          })}
+          {datasetsState.kind === "loading" && (
+            <div style={{ padding: "4px 8px" }}>
+              <Text color="muted" size="sm">
+                Loading…
+              </Text>
+            </div>
+          )}
+          {datasetsState.kind === "error" && (
+            <div style={{ padding: "4px 8px" }}>
+              <Text color="muted" size="sm">
+                Datasets unavailable
+              </Text>
+            </div>
+          )}
+          {datasetsState.kind === "ready" &&
+            datasetsState.data.datasets.map((slug) => {
+              const href = `/history/${slug}`;
+              const active = pathname.includes(`/${slug}`);
+              return (
+                <RouterLink
+                  key={slug}
+                  to={href}
+                  style={{ textDecoration: "none" }}
+                >
+                  <SidebarNavigationItem
+                    label={datasetLabel(slug)}
+                    icon={datasetIcon(slug)}
+                    selected={active}
+                  />
+                </RouterLink>
+              );
+            })}
         </div>
 
         <div className="sidebar-section">

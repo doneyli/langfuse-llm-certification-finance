@@ -51,6 +51,13 @@ async def api_config():
     return JSONResponse({"langfuse_url": client.host})
 
 
+@app.get("/api/datasets")
+async def api_datasets():
+    """Datasets shown in the portal (PORTAL_DATASETS override, else discovered
+    from Langfuse by PORTAL_DATASET_PREFIX, else a known-slugs fallback)."""
+    return JSONResponse({"datasets": client.list_datasets()})
+
+
 @app.get("/api/dashboard")
 async def api_dashboard():
     return JSONResponse(client.get_dashboard_data())

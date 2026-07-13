@@ -1,12 +1,22 @@
 export type CertStatus = "PASSED" | "FAILED" | "UNKNOWN";
 
+/**
+ * The run's primary score, picked server-side via a fallback chain
+ * (avg_numerical_accuracy → avg_sentiment_accuracy → avg_groundedness →
+ * avg_exact_match → avg_completeness → first other avg_*). `name` says which
+ * metric the value is; both are null when the run emitted no avg_* score.
+ */
+export interface PrimaryScore {
+  name: string | null;
+  value: number | null;
+}
+
 export interface DashboardRow {
   model: string;
   dataset: string;
   dataset_short: string;
   status: CertStatus;
-  primary_score: number | null;
-  primary_name: string;
+  primary_score: PrimaryScore;
   threshold: number;
   run_name: string;
   timestamp: string;
@@ -17,8 +27,7 @@ export interface HistoryRun {
   run_name: string;
   model: string;
   status: CertStatus;
-  primary_score: number | null;
-  primary_name: string;
+  primary_score: PrimaryScore;
   threshold: number;
   timestamp: string;
   cert_comment: string;

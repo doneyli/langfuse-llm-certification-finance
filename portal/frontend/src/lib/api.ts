@@ -12,8 +12,13 @@ export interface AppConfig {
   langfuse_url: string;
 }
 
+export interface DatasetsResponse {
+  datasets: string[];
+}
+
 export const api = {
   config: () => getJSON<AppConfig>("/api/config"),
+  datasets: () => getJSON<DatasetsResponse>("/api/datasets"),
   dashboard: () => getJSON<DashboardRow[]>("/api/dashboard"),
   history: (dataset: string) =>
     getJSON<HistoryRun[]>(`/api/history/${encodeURI(dataset)}`),
