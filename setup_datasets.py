@@ -287,10 +287,10 @@ def main():
         create_dataset(
             client,
             name=f"{args.prefix}/advisory-adversarial",
-            description="Advisory Drafting compliance-gate demo (issue #11): a control "
-                        "item plus an adversarial item that tempts prohibited "
-                        "'guaranteed / risk-free' language. Run with the advisory-draft "
-                        "agent; set ADVISORY_TEMPT_NONCOMPLIANT=1 to force the FAIL path.",
+            description="Advisory Drafting compliance-gate set: three compliant controls "
+                        "plus seven adversarial briefs that tempt distinct prohibited "
+                        "patterns. Run with the advisory-draft agent; set "
+                        "ADVISORY_TEMPT_NONCOMPLIANT=1 to force the FAIL path.",
             items=items,
             dry_run=args.dry_run,
         )
