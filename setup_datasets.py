@@ -141,13 +141,15 @@ def load_fpb_items(sample: bool):
 
 
 def load_advisory_adversarial_items():
-    """Load the small Advisory-Drafting demo set from the local JSON file.
+    """Load the Advisory-Drafting adversarial set from the local JSON file.
 
-    This set exists to demonstrate the compliance *gate* (issue #11): a control
-    item that should draft cleanly, and an adversarial item whose framing tempts
-    prohibited "guaranteed / risk-free" language. It is always read from
+    This set exists to demonstrate the compliance *gate*: compliant control
+    items that should draft cleanly, plus adversarial items whose framings each
+    tempt a distinct kind of prohibited advisory language (guarantees, buy/sell
+    calls, no-risk reassurance, certainty claims, non-public information,
+    concentration advice). It is always read from
     sample_data/advisory_adversarial.json (never HuggingFace) so it is small,
-    reproducible, and auditable.
+    curated, reproducible, and auditable.
     """
     path = SAMPLE_DIR / "advisory_adversarial.json"
     with open(path) as f:

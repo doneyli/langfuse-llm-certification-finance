@@ -335,7 +335,7 @@ Options:
 |---------|-------|--------|-------|
 | `financebench` | 10 (sample) / 150 (full) | [PatronusAI/financebench](https://huggingface.co/datasets/PatronusAI/financebench) | Financial QA from SEC filings |
 | `fpb` | 10 (sample) / ~4850 (full) | [ChanceFocus/en-fpb](https://huggingface.co/datasets/ChanceFocus/en-fpb) | Financial sentiment classification |
-| `advisory-adversarial` | 2 (embedded) | `sample_data/advisory_adversarial.json` | Client-update briefs that tempt non-compliant advisory language |
+| `advisory-adversarial` | 10 (embedded) | `sample_data/advisory_adversarial.json` | Client-update briefs: 3 compliant controls + 7 briefs that each tempt a distinct kind of non-compliant advisory language (guarantees, buy/sell calls, no-risk reassurance, certainty claims, non-public information, concentration advice) |
 
 `advisory-adversarial` loads as `certification/advisory-adversarial` (no `-sample`/`-v1` suffix)
 and is deliberately excluded from `--dataset all`. It exists to demo the `advisory-draft` agent's
@@ -962,7 +962,7 @@ Two financial benchmarks plus an embedded adversarial set are included:
 |---------|-------|-------|
 | [FinanceBench](https://huggingface.co/datasets/PatronusAI/financebench) | 10 (sample) / 150 (full) | Financial QA from SEC filings |
 | [Financial PhraseBank](https://huggingface.co/datasets/ChanceFocus/en-fpb) | 10 (sample) / ~4850 (full) | Financial sentiment classification |
-| `advisory-adversarial` (embedded) | 2 | Briefs that tempt non-compliant advisory language — demos the hard compliance gate |
+| `advisory-adversarial` (embedded) | 10 | Briefs that tempt distinct kinds of non-compliant advisory language — demos the hard compliance gate |
 
 You can add custom datasets — see the [Customization](#customization) section.
 
