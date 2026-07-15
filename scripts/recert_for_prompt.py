@@ -42,8 +42,12 @@ class RecertJob:
 _USECASE_BY_PROMPT = {
     "usecase-10k-analyst-compose": ("10k-analyst", "certification/financebench-sample"),
     "usecase-sentiment-classify": ("sentiment-triage", "certification/fpb-sample"),
-    "usecase-advisory-analyze": ("advisory-draft", "certification/financebench-sample"),
-    "usecase-advisory-draft": ("advisory-draft", "certification/financebench-sample"),
+    # advisory-draft certifies on advisory-adversarial, not financebench:
+    # FinanceBench items carry question_reasoning="Numerical reasoning", which
+    # makes tool_use_correctness demand the calculator tool this agent never
+    # uses — its hard tool_use gate (1.00) can therefore never pass there.
+    "usecase-advisory-analyze": ("advisory-draft", "certification/advisory-adversarial"),
+    "usecase-advisory-draft": ("advisory-draft", "certification/advisory-adversarial"),
 }
 
 # Model-certification prompts -> dataset.

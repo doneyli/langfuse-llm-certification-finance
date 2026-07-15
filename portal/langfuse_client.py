@@ -108,21 +108,26 @@ class PortalClient:
         encoded = urllib.parse.quote(dataset_name, safe="")
         try:
             return self._paginate(f"/api/public/datasets/{encoded}/runs")
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to fetch runs for dataset %s (%s); "
+                           "treating as no runs", dataset_name, exc)
             return []
 
     def _get_scores_by_name(self, name):
         """Fetch all scores with a given name (paginated)."""
         try:
             return self._paginate(f"/api/public/scores?name={urllib.parse.quote(name)}")
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to fetch scores named %s (%s); "
+                           "treating as no scores", name, exc)
             return []
 
     def _get_trace(self, trace_id):
         """Fetch a trace by ID."""
         try:
             return self._api_get(f"/api/public/traces/{trace_id}")
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to fetch trace %s (%s)", trace_id, exc)
             return None
 
     def _build_cert_index(self):
@@ -357,7 +362,11 @@ class PortalClient:
                 break
 
         if not target_run:
-            return {"error": f"Run '{run_name}' not found", "items": [],
+            return {"error": f"Run '{run_name}' not found",
+                    "dataset": dataset_name,
+                    "dataset_short": dataset_name.split("/")[-1],
+                    "run_name": run_name, "threshold": 0.85,
+                    "total_items": 0, "items": [],
                     "aggregates": {}, "model": "", "status": "UNKNOWN",
                     "score_names": [], "langfuse_url": self.host}
 

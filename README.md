@@ -11,7 +11,7 @@ Automated certification pipeline for **AI agents** and **LLM models**, built on 
 | **Model certification** | `run_certification.py` | one LLM call per item; primary accuracy score ≥ threshold | any OpenAI-compatible endpoint or Claude model |
 | **[AI agent certification](#ai-agent-certification)** | `run_usecase_certification.py` | a multi-step **agent** per item; **every** gate dimension must pass (accuracy, groundedness, compliance, tool use…) | three registered agents: **`10k-analyst`** (SEC-filing QA with a calculator tool), **`sentiment-triage`** (classification with human routing), **`advisory-draft`** (compliance-gated client prose) |
 
-**The loop:** The pieces form Langfuse's [AI Engineering Loop](docs/ai-engineering-loop.md) (Trace → Monitor → Build Datasets → Experiment → Evaluate) end to end: production failures are promoted back into golden datasets, and promoting a prompt in Langfuse automatically re-runs the affected certification in CI.
+**The loop:** The pieces form Langfuse's [AI Engineering Loop](docs/ai-engineering-loop.md) (Trace → Monitor → Build Datasets → Experiment → Evaluate) end to end: production failures are promoted back into golden datasets, and the pipeline ships CI workflows that re-run the affected certification when a prompt is promoted in Langfuse (one-time setup: [loop activation checklist](docs/loop-activation-checklist.md)).
 
 ## Architecture
 
@@ -120,6 +120,33 @@ local Langfuse can saturate the OTel queue on long, CoT-heavy runs.
 > end-to-end, then move to self-hosted if compliance or data-residency
 > requirements demand it. The certification scripts, evaluators, dataset
 > loaders, portal, and CI workflows are identical for both deployments.
+
+### Keeping local and Cloud side by side (optional)
+
+You don't have to choose once: keep one credential profile per deployment and
+swap. Every script (and the portal) loads `.env` with `override=True`, so the
+`.env` *file* always wins over exported shell variables — the swap lever is
+which profile the file points to, and `scripts/use_env.sh` manages that via a
+symlink:
+
+```bash
+mv .env .env.local                      # one-time: keep your current .env as the 'local' profile
+cp .env.local .env.cloud                # then edit .env.cloud with your Cloud keys + base URL
+
+bash scripts/use_env.sh status          # which profile is active
+bash scripts/use_env.sh cloud           # point .env at .env.cloud
+bash scripts/use_env.sh local           # point .env at .env.local
+
+# Run one command against BOTH deployments (sequentially, then restore):
+bash scripts/use_env.sh both -- uv run python run_certification.py \
+  --dataset certification/financebench-sample --model claude-sonnet-4-6
+```
+
+Both profiles are covered by `.gitignore` (`.env.*`). There is no dual-write
+mode — a certification run talks to exactly one Langfuse instance — so "send
+to both" means running the same command once per profile, which is what
+`both --` automates (each instance gets its own traces, scores, and runs).
+The portal reads `.env` once at startup: restart it after a switch.
 
 ## Quick Start
 
@@ -411,7 +438,7 @@ Options:
 | `financial-sentiment` | model cert on `certification/fpb-sample` |
 | `usecase-10k-analyst-compose` | `10k-analyst` on `certification/financebench-sample` |
 | `usecase-sentiment-classify` | `sentiment-triage` on `certification/fpb-sample` |
-| `usecase-advisory-analyze`, `usecase-advisory-draft` | `advisory-draft` on `certification/financebench-sample` |
+| `usecase-advisory-analyze`, `usecase-advisory-draft` | `advisory-draft` on `certification/advisory-adversarial` |
 
 An unmapped prompt name is a no-op (exit 0); a failed gate exits 1.
 
@@ -736,7 +763,9 @@ Live tests cover:
 
 ### GitHub Actions
 
-Three workflows automate the loop:
+The pipeline ships three workflows that automate the loop. `tests.yml` runs
+out of the box (no secrets); the two live-certification workflows activate
+once you add the four secrets listed below to your repository:
 
 **`tests.yml` — offline tests.** Runs the offline suite (`pytest --ignore=tests/test_certification.py`) on every pull request and every push to `main`. No secrets required.
 

@@ -25,9 +25,9 @@ Environment variables:
 
 import argparse
 import json
+import os
 import sys
 import urllib.request
-import urllib.error
 from datetime import datetime, timedelta, timezone
 
 from evaluators import (
@@ -168,6 +168,11 @@ def main():
         load_dotenv(override=True)
     except ImportError:
         pass
+
+    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
+        print("Error: LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY required",
+              file=sys.stderr)
+        sys.exit(1)
 
     host, auth = _get_auth()
 

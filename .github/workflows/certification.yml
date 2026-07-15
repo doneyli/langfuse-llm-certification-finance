@@ -7,7 +7,7 @@ on:
       model:
         description: 'Model to certify'
         required: false
-        default: 'claude-haiku-4-5-20251001'
+        default: 'claude-sonnet-4-6'
       threshold:
         description: 'Pass threshold (0.0-1.0)'
         required: false
@@ -49,11 +49,16 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Run FinanceBench certification
+        # Inputs go through env indirection (never interpolated into the shell
+        # script) so a crafted dispatch input cannot inject commands.
+        env:
+          MODEL: ${{ github.event.inputs.model || 'claude-sonnet-4-6' }}
+          THRESHOLD: ${{ github.event.inputs.threshold || '0.85' }}
         run: |
           uv run python run_certification.py \
             --dataset certification/financebench-sample \
-            --model ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }} \
-            --threshold ${{ github.event.inputs.threshold || '0.85' }} \
+            --model "$MODEL" \
+            --threshold "$THRESHOLD" \
             --ci
 
   certify-fpb:
@@ -70,11 +75,14 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Run FPB sentiment certification
+        env:
+          MODEL: ${{ github.event.inputs.model || 'claude-sonnet-4-6' }}
+          THRESHOLD: ${{ github.event.inputs.threshold || '0.85' }}
         run: |
           uv run python run_certification.py \
             --dataset certification/fpb-sample \
-            --model ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }} \
-            --threshold ${{ github.event.inputs.threshold || '0.85' }} \
+            --model "$MODEL" \
+            --threshold "$THRESHOLD" \
             --ci
 
   certify-usecase:
@@ -91,11 +99,13 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Run 10-K analyst use-case certification
+        env:
+          MODEL: ${{ github.event.inputs.model || 'claude-sonnet-4-6' }}
         run: |
           uv run python run_usecase_certification.py \
             --use-case 10k-analyst \
             --dataset certification/financebench-sample \
-            --model ${{ github.event.inputs.model || 'claude-sonnet-4-6' }} \
+            --model "$MODEL" \
             --ci
 
   pytest-gate:
@@ -115,6 +125,6 @@ jobs:
 
       - name: Run certification tests
         env:
-          CERT_MODEL: ${{ github.event.inputs.model || 'claude-haiku-4-5-20251001' }}
+          CERT_MODEL: ${{ github.event.inputs.model || 'claude-sonnet-4-6' }}
           CERT_THRESHOLD: ${{ github.event.inputs.threshold || '0.85' }}
         run: uv run pytest tests/test_certification.py -v --tb=short

@@ -54,9 +54,20 @@ from agents import AGENT_REGISTRY
 from evaluators import average_score_evaluator, usecase_certification_gate
 from cert_common import persist_run_evaluations, queue_failed_items
 
-# Known use cases, even before their agent modules land (issues #9/#10/#11). Used
-# for CLI choices + a friendly "not implemented yet" message.
+# All three agents ship registered. The list stays separate from AGENT_REGISTRY
+# because the agents package tolerates a *missing* agent module file
+# (ModuleNotFoundError for the module itself — see agents/__init__.py), so the
+# CLI can still --list and report the gap. Any other import-time error inside an
+# agent module propagates loudly by design.
 KNOWN_USE_CASES = ["10k-analyst", "sentiment-triage", "advisory-draft"]
+
+# Module implementing each use case, for the debug hints below — slugs do not
+# map 1:1 to module names (10k-analyst lives in financial_analyst).
+_AGENT_MODULE = {
+    "10k-analyst": "agents.financial_analyst",
+    "sentiment-triage": "agents.sentiment_triage",
+    "advisory-draft": "agents.advisory_draft",
+}
 
 
 # --------------- CLI ---------------
@@ -98,8 +109,9 @@ def list_use_cases():
             print(f"               dataset hint: {entry['dataset_hint']}", file=sys.stderr)
             print(f"               gate: {dims}", file=sys.stderr)
         else:
-            print(f"  [pending]    {name:18s} agent not implemented yet "
-                  f"(see GitHub issues #9/#10/#11)", file=sys.stderr)
+            print(f"  [unavailable] {name:18s} agent module missing or not "
+                  f"registered — check `python -c 'import "
+                  f"{_AGENT_MODULE.get(name, 'agents')}'`", file=sys.stderr)
 
 
 # --------------- Annotation queue routing ---------------
@@ -139,13 +151,12 @@ def main():
 
     entry = AGENT_REGISTRY.get(args.use_case)
     if entry is None:
-        print(f"Error: use case '{args.use_case}' is not implemented yet.\n"
-              f"  The shared foundation (issue #8) is in place; the agent itself "
-              f"lands in a later issue:\n"
-              f"    10k-analyst      -> #9\n"
-              f"    sentiment-triage -> #10\n"
-              f"    advisory-draft   -> #11\n"
-              f"  Run with --list to see what is registered.", file=sys.stderr)
+        print(f"Error: use case '{args.use_case}' is not registered — its agent "
+              f"module is missing or did not self-register.\n"
+              f"  Run with --list to see what is registered, or check the import "
+              f"directly: python -c 'import "
+              f"{_AGENT_MODULE.get(args.use_case, 'agents')}'",
+              file=sys.stderr)
         sys.exit(1)
 
     if not args.dataset:

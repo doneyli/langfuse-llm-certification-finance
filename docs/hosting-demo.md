@@ -112,7 +112,7 @@ Almost nothing in code changes — the SDK and REST layer already honor
    uv run python run_certification.py --dataset certification/financebench-sample --model claude-sonnet-4-6
    uv run python run_usecase_certification.py --use-case 10k-analyst      --dataset certification/financebench-sample --model claude-sonnet-4-6
    uv run python run_usecase_certification.py --use-case sentiment-triage --dataset certification/fpb-sample            --model claude-sonnet-4-6
-   uv run python run_usecase_certification.py --use-case advisory-draft   --dataset certification/financebench-sample --model claude-sonnet-4-6
+   uv run python run_usecase_certification.py --use-case advisory-draft   --dataset certification/advisory-adversarial --model claude-sonnet-4-6
    ```
 4. Verify the dashboard locally against Cloud (`python -m portal.app`) before
    deploying — same code, just different env.

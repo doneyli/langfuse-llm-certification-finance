@@ -15,16 +15,6 @@ export function statusToBadge(status: CertStatus): {
   }
 }
 
-export function pct(n: number | null | undefined, digits = 1): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return "—";
-  return `${(n * 100).toFixed(digits)}%`;
-}
-
-export function pctRound(n: number | null | undefined): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return "—";
-  return `${Math.round(n * 100)}%`;
-}
-
 /** "avg_numerical_accuracy" → "numerical accuracy" (for secondary text). */
 export function metricLabel(name: string | null | undefined): string {
   if (!name) return "";

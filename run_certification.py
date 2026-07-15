@@ -44,7 +44,7 @@ os.environ.setdefault("LANGFUSE_FLUSH_AT", "64")
 os.environ.setdefault("LANGFUSE_FLUSH_INTERVAL", "2")
 
 try:
-    from langfuse import get_client, Evaluation
+    from langfuse import get_client
     from langfuse.openai import OpenAI as LangfuseOpenAI
 except ImportError:
     print("Error: langfuse package not installed. Run: pip install 'langfuse>=3.0,<4.0'",
@@ -112,11 +112,6 @@ def parse_args():
 
 
 # --------------- LLM Clients ---------------
-
-def is_openai_model(model: str) -> bool:
-    """Check if model should use OpenAI-compatible API."""
-    return model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3")
-
 
 def is_claude_native(model: str) -> bool:
     """Check if model should use native Anthropic SDK."""

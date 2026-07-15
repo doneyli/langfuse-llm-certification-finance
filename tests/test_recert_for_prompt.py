@@ -23,8 +23,8 @@ class TestUseCasePrompts:
     @pytest.mark.parametrize("prompt_name,use_case,dataset", [
         ("usecase-10k-analyst-compose", "10k-analyst", "certification/financebench-sample"),
         ("usecase-sentiment-classify", "sentiment-triage", "certification/fpb-sample"),
-        ("usecase-advisory-analyze", "advisory-draft", "certification/financebench-sample"),
-        ("usecase-advisory-draft", "advisory-draft", "certification/financebench-sample"),
+        ("usecase-advisory-analyze", "advisory-draft", "certification/advisory-adversarial"),
+        ("usecase-advisory-draft", "advisory-draft", "certification/advisory-adversarial"),
     ])
     def test_maps_to_usecase_recert(self, prompt_name, use_case, dataset):
         jobs = recert.resolve_recert_plan(prompt_name)

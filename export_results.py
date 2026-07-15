@@ -26,6 +26,8 @@ import io
 import json
 import os
 import sys
+import urllib.parse
+import urllib.request
 from datetime import datetime
 
 try:
@@ -34,6 +36,8 @@ except ImportError:
     print("Error: langfuse package not installed. Run: pip install 'langfuse>=3.0,<4.0'",
           file=sys.stderr)
     sys.exit(1)
+
+from cert_common import langfuse_creds
 
 
 # --------------- CLI ---------------
@@ -56,58 +60,109 @@ def parse_args():
 
 # --------------- Data Collection ---------------
 
+# Langfuse REST API enforces max limit=100 per page; cap pages as a circuit
+# breaker (same convention as portal/langfuse_client.py).
+PAGE_SIZE = 100
+MAX_PAGES = 100
+
+
+def _api_get(host, auth, path):
+    req = urllib.request.Request(
+        f"{host}{path}",
+        headers={"Authorization": f"Basic {auth}"},
+    )
+    return json.loads(urllib.request.urlopen(req).read())
+
+
+def _paginate(host, auth, path):
+    """Fetch all pages of a Langfuse list endpoint; returns concatenated data."""
+    sep = "&" if "?" in path else "?"
+    out = []
+    page = 1
+    while page <= MAX_PAGES:
+        resp = _api_get(host, auth, f"{path}{sep}limit={PAGE_SIZE}&page={page}")
+        batch = resp.get("data", []) or []
+        out.extend(batch)
+        meta = resp.get("meta") or {}
+        total_pages = meta.get("totalPages")
+        if total_pages is None:
+            if len(batch) < PAGE_SIZE:
+                break
+        elif page >= total_pages:
+            break
+        page += 1
+    return out
+
+
 def collect_run_data(client, dataset_name, run_name=None):
     """Collect experiment run data from Langfuse.
 
+    Runs, run items, and trace scores come from the REST API (the v3 SDK's
+    DatasetClient does not expose runs); dataset items come from the SDK.
     Returns a dict with run metadata and per-item scores.
     """
-    dataset = client.get_dataset(dataset_name)
+    try:
+        dataset = client.get_dataset(dataset_name)
+    except Exception as e:
+        print(f"Error: could not fetch dataset '{dataset_name}': {e}", file=sys.stderr)
+        sys.exit(1)
+    host, auth = langfuse_creds()
 
     # Find the target run
-    runs = dataset.runs
+    encoded_ds = urllib.parse.quote(dataset_name, safe="")
+    runs = _paginate(host, auth, f"/api/public/datasets/{encoded_ds}/runs")
     if not runs:
         print(f"Error: no runs found for dataset '{dataset_name}'", file=sys.stderr)
         sys.exit(1)
 
     if run_name:
-        target_runs = [r for r in runs if r.name == run_name]
+        target_runs = [r for r in runs if r.get("name") == run_name]
         if not target_runs:
-            available = [r.name for r in runs]
+            available = [r.get("name") for r in runs]
             print(f"Error: run '{run_name}' not found. Available: {available}", file=sys.stderr)
             sys.exit(1)
         run = target_runs[0]
     else:
         # Use the most recent run
-        run = runs[-1]
+        run = max(runs, key=lambda r: r.get("createdAt", ""))
 
-    print(f"  Exporting run: {run.name}", file=sys.stderr)
+    print(f"  Exporting run: {run['name']}", file=sys.stderr)
 
     # Collect scores from run items
+    encoded_run = urllib.parse.quote(run["name"])
+    run_items = _paginate(
+        host, auth,
+        f"/api/public/dataset-run-items?datasetId={dataset.id}&runName={encoded_run}",
+    )
+    ds_items = {item.id: item for item in dataset.items}
+
     items_data = []
     score_totals = {}  # {score_name: [values]}
 
-    for run_item in run.dataset_run_items:
-        trace_id = run_item.trace_id
+    for run_item in run_items:
+        trace_id = run_item.get("traceId", "")
 
-        # Get scores for this trace
+        # Get scores embedded in this item's trace
         item_scores = {}
         try:
-            trace = client.get_trace(trace_id)
-            if hasattr(trace, 'scores') and trace.scores:
-                for score in trace.scores:
-                    item_scores[score.name] = {
-                        "value": score.value,
-                        "comment": getattr(score, 'comment', ''),
-                    }
-                    if score.name not in score_totals:
-                        score_totals[score.name] = []
-                    if score.value is not None:
-                        score_totals[score.name].append(score.value)
+            trace = _api_get(host, auth, f"/api/public/traces/{trace_id}")
+            for score in trace.get("scores", []) or []:
+                sname = score.get("name")
+                if not sname:
+                    continue
+                item_scores[sname] = {
+                    "value": score.get("value"),
+                    "comment": score.get("comment", "") or "",
+                }
+                if sname not in score_totals:
+                    score_totals[sname] = []
+                if score.get("value") is not None:
+                    score_totals[sname].append(score["value"])
         except Exception as e:
             print(f"    Warning: could not fetch trace {trace_id}: {e}", file=sys.stderr)
 
         # Get the dataset item input/expected for context
-        dataset_item = run_item.dataset_item
+        dataset_item = ds_items.get(run_item.get("datasetItemId", ""))
         items_data.append({
             "trace_id": trace_id,
             "input": dataset_item.input if dataset_item else {},
@@ -129,8 +184,8 @@ def collect_run_data(client, dataset_name, run_name=None):
 
     return {
         "dataset": dataset_name,
-        "run_name": run.name,
-        "run_metadata": run.metadata or {},
+        "run_name": run["name"],
+        "run_metadata": run.get("metadata") or {},
         "exported_at": datetime.now().isoformat(),
         "total_items": len(items_data),
         "aggregates": aggregates,

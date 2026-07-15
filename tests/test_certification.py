@@ -22,6 +22,7 @@ Environment variables:
 
 import os
 import sys
+from datetime import datetime
 
 import pytest
 
@@ -29,6 +30,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from langfuse import get_client
+from cert_common import persist_run_evaluations
 from run_certification import create_certification_task
 from evaluators import (
     numerical_accuracy_evaluator,
@@ -47,6 +49,37 @@ MODEL = os.getenv("CERT_MODEL", "claude-haiku-4-5-20251001")
 THRESHOLD = float(os.getenv("CERT_THRESHOLD", "0.85"))
 ENDPOINT = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+
+
+def _run_gate_experiment(dataset, *, run_slug, gate_name, threshold,
+                         evaluators, dataset_name):
+    """Run one live-gate experiment with the same Langfuse conventions as
+    run_certification.py: timestamped run name (re-runs must not append items
+    to an old run), metadata.model (dashboard row identity), and persisted
+    run-level scores (the SDK computes run_evaluators locally but does not
+    store them)."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    result = dataset.run_experiment(
+        name=dataset_name.split("/")[-1],
+        run_name=f"ci-{MODEL}-{run_slug}-{timestamp}",
+        description=f"CI live gate: {gate_name} for {MODEL} against {dataset_name}",
+        task=create_certification_task(MODEL, ENDPOINT, API_KEY),
+        evaluators=evaluators,
+        run_evaluators=[
+            average_score_evaluator(gate_name),
+            certification_gate(gate_name, threshold),
+        ],
+        max_concurrency=5,
+        metadata={
+            "model": f"ci-{MODEL}",
+            "base_model": MODEL,
+            "dataset": dataset_name,
+            "threshold": threshold,
+            "gate": gate_name,
+        },
+    )
+    persist_run_evaluations(result)
+    return result
 
 
 # --------------- Fixtures ---------------
@@ -73,16 +106,13 @@ class TestFinanceBenchCertification:
         """Model must meet the numerical accuracy threshold on FinanceBench."""
         dataset = langfuse.get_dataset(self.DATASET)
 
-        result = dataset.run_experiment(
-            name=self.DATASET.split("/")[-1],
-            run_name=f"ci-{MODEL}-financebench-accuracy",
-            task=create_certification_task(MODEL, ENDPOINT, API_KEY),
+        result = _run_gate_experiment(
+            dataset,
+            run_slug="financebench-accuracy",
+            gate_name="numerical_accuracy",
+            threshold=THRESHOLD,
             evaluators=[numerical_accuracy_evaluator, exact_match_evaluator],
-            run_evaluators=[
-                average_score_evaluator("numerical_accuracy"),
-                certification_gate("numerical_accuracy", THRESHOLD),
-            ],
-            max_concurrency=5,
+            dataset_name=self.DATASET,
         )
 
         cert = next(
@@ -96,16 +126,13 @@ class TestFinanceBenchCertification:
         """Model must not produce any prohibited financial phrases."""
         dataset = langfuse.get_dataset(self.DATASET)
 
-        result = dataset.run_experiment(
-            name=self.DATASET.split("/")[-1],
-            run_name=f"ci-{MODEL}-financebench-compliance",
-            task=create_certification_task(MODEL, ENDPOINT, API_KEY),
+        result = _run_gate_experiment(
+            dataset,
+            run_slug="financebench-compliance",
+            gate_name="regulatory_compliance",
+            threshold=1.0,
             evaluators=[regulatory_compliance_evaluator],
-            run_evaluators=[
-                average_score_evaluator("regulatory_compliance"),
-                certification_gate("regulatory_compliance", 1.0),
-            ],
-            max_concurrency=5,
+            dataset_name=self.DATASET,
         )
 
         cert = next(
@@ -125,16 +152,13 @@ class TestFPBCertification:
         """Model must meet the sentiment accuracy threshold on FPB."""
         dataset = langfuse.get_dataset(self.DATASET)
 
-        result = dataset.run_experiment(
-            name=self.DATASET.split("/")[-1],
-            run_name=f"ci-{MODEL}-fpb-accuracy",
-            task=create_certification_task(MODEL, ENDPOINT, API_KEY),
+        result = _run_gate_experiment(
+            dataset,
+            run_slug="fpb-accuracy",
+            gate_name="sentiment_accuracy",
+            threshold=THRESHOLD,
             evaluators=[sentiment_evaluator],
-            run_evaluators=[
-                average_score_evaluator("sentiment_accuracy"),
-                certification_gate("sentiment_accuracy", THRESHOLD),
-            ],
-            max_concurrency=5,
+            dataset_name=self.DATASET,
         )
 
         cert = next(

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Use Case 3 — Client Advisory Drafting Agent (FinanceBench + compliance gate).
+Use Case 3 — Client Advisory Drafting Agent (advisory-adversarial + compliance gate).
 
 Drafts a short, client-facing summary from filing data. This is the use case that
 demonstrates **compliance as a gate, not a metric**: `regulatory_compliance` is a
@@ -191,6 +191,6 @@ register_agent(
     fn=run_advisory_draft,
     gate_thresholds=GATE_ADVISORY_DRAFT,
     item_evaluators=ITEM_EVALUATORS,
-    dataset_hint="financebench",
+    dataset_hint="advisory-adversarial",
     description="Client Advisory Drafting — grounded client summary with a hard compliance gate",
 )

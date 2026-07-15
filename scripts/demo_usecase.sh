@@ -10,15 +10,24 @@
 #
 # Usage:
 #   bash scripts/demo_usecase.sh                 # default: 10k-analyst on financebench-sample
-#   USE_CASE=sentiment-triage DATASET=certification/fpb-sample bash scripts/demo_usecase.sh
+#   USE_CASE=sentiment-triage bash scripts/demo_usecase.sh     # picks fpb-sample by default
+#   USE_CASE=advisory-draft bash scripts/demo_usecase.sh       # picks advisory-adversarial
 #   MODEL=claude-haiku-4-5-20251001 bash scripts/demo_usecase.sh   # whole-system lift: cheap model still passes
 #
 # Env: LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL, ANTHROPIC_API_KEY
 set -euo pipefail
 
 USE_CASE="${USE_CASE:-10k-analyst}"
-DATASET="${DATASET:-certification/financebench-sample}"
 MODEL="${MODEL:-claude-sonnet-4-6}"
+
+# Each agent certifies against its own golden dataset (matching the
+# recert_for_prompt.py routing); override with DATASET=... if needed.
+case "$USE_CASE" in
+  sentiment-triage) DEFAULT_DATASET="certification/fpb-sample" ;;
+  advisory-draft)   DEFAULT_DATASET="certification/advisory-adversarial" ;;
+  *)                DEFAULT_DATASET="certification/financebench-sample" ;;
+esac
+DATASET="${DATASET:-$DEFAULT_DATASET}"
 
 RUN() { echo; echo "▶ $*"; "$@"; }
 banner() { echo; echo "════════════════════════════════════════════════════════════"; echo "  $*"; echo "════════════════════════════════════════════════════════════"; }
@@ -53,6 +62,9 @@ load_if_empty() {  # $1 = --dataset arg, $2 = full dataset name
 }
 load_if_empty financebench certification/financebench-sample
 load_if_empty fpb certification/fpb-sample
+if [ "$USE_CASE" = "advisory-draft" ]; then
+  load_if_empty advisory-adversarial certification/advisory-adversarial
+fi
 
 # ── Stage 2: prompt management ─────────────────────────────────────────────
 banner "2/6  Prompt management (model-cert + use-case agent templates)"
