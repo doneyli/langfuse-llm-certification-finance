@@ -1,10 +1,10 @@
 # Evaluation Pipeline Gaps & Roadmap
 
-> **Historical** — this roadmap predates use-case certification and the AI Engineering Loop
+> **Historical** — this roadmap predates the multi-dimensional deployment gate for AI agents and the AI Engineering Loop
 > reframing; all gaps below are closed. Superseded by
 > [ai-engineering-loop.md](ai-engineering-loop.md). Kept for provenance.
 
-Identified gaps in the current LLM certification pipeline, with recommended actions based on [Langfuse documentation](https://langfuse.com/docs/evaluation/overview).
+Identified gaps in the current LLM deployment gate, with recommended actions based on [Langfuse documentation](https://langfuse.com/docs/evaluation/overview).
 
 > Status key: **Done** | **In Progress** | **Todo**
 
@@ -60,7 +60,7 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 
 **Status: Done**
 
-**Problem:** The pipeline was fully automated with no human-in-the-loop review. For financial services certification, compliance teams need the ability to manually review edge cases and sign off on results.
+**Problem:** The pipeline was fully automated with no human-in-the-loop review. For a financial services deployment gate, human sign-off has to stay accountable — compliance teams need the ability to manually review edge cases and sign off on results.
 
 **What we added:**
 
@@ -73,11 +73,11 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
    - Idempotent — skips if queue already exists
 
 3. **Auto-routing of failed items** (`run_certification.py --queue-failures`):
-   - After a certification run, items where `primary_score = 0` or `groundedness < 0.5` are automatically routed to the annotation queue
-   - Reviewers see the items in the Langfuse UI under Annotation Queues, score them using the human rubric, and click "Complete + next"
+   - After a gate run, items where `primary_score = 0` or `groundedness < 0.5` are automatically routed to the annotation queue
+   - Reviewers see the items in the Langfuse UI under Annotation Queues, score them using the human rubric, and click "Complete + next" — producing reviewable evidence for sign-off
 
 **Human review workflow:**
-1. Run certification: `python run_certification.py --dataset ... --queue-failures`
+1. Run the deployment gate: `python run_certification.py --dataset ... --queue-failures`
 2. Open Langfuse UI > Annotation Queues > "Certification Review"
 3. For each queued trace, reviewer sees the question, model output, and source evidence
 4. Reviewer scores `human_accuracy` and `human_groundedness` using the category rubrics
@@ -108,9 +108,9 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 **Prompt update workflow:**
 1. Open Langfuse UI > **Prompts** > select a prompt (e.g., `financial-qa`)
 2. Edit the prompt text — this creates a new immutable version
-3. Test the new version by running a certification experiment (it picks up `latest` by default)
+3. Test the new version by running a gate experiment (it picks up `latest` by default)
 4. When satisfied, move the `production` label to the new version
-5. All future certification runs automatically use the new prompt — no code changes needed
+5. All future gate runs automatically use the new prompt — no code changes needed
 6. To roll back, reassign the `production` label back to a previous version
 
 **Langfuse reference:** [Prompt Management](https://langfuse.com/docs/prompt-management/get-started)
@@ -121,7 +121,7 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 
 **Status: Done**
 
-**Problem:** The pipeline only ran offline experiments (batch certification). Once a model is certified and deployed to production, there was no continuous monitoring for quality degradation or compliance violations.
+**Problem:** The pipeline only ran offline experiments (batch gate runs). Once a model has cleared the gate and been deployed to production, there was no continuous monitoring for quality degradation or compliance violations.
 
 **What we added:**
 
@@ -160,9 +160,9 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 
 **What we added:**
 
-1. **`--ci` flag** on `run_certification.py` — exits with code 1 if certification fails, enabling use as a CI gate.
+1. **`--ci` flag** on `run_certification.py` — exits with code 1 if the gate fails, enabling use as a CI gate.
 
-2. **`tests/test_certification.py`** — pytest tests that run certification experiments:
+2. **`tests/test_certification.py`** — pytest tests that run gate experiments:
    - `TestFinanceBenchCertification::test_numerical_accuracy_meets_threshold`
    - `TestFinanceBenchCertification::test_regulatory_compliance`
    - `TestFPBCertification::test_sentiment_accuracy_meets_threshold`
@@ -171,7 +171,7 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 3. **`.github/workflows/certification.yml`** — GitHub Actions workflow:
    - Manual dispatch with configurable model and threshold inputs
    - Auto-triggers on push to `main` when evaluators, prompts, or config change
-   - Runs FinanceBench and FPB certification in parallel with `--ci`
+   - Runs the FinanceBench and FPB gates in parallel with `--ci`
    - Runs pytest gate after both complete
    - Requires secrets: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `ANTHROPIC_API_KEY`
 

@@ -1,7 +1,7 @@
 # Self-host Langfuse (local evaluation)
 
 A curated [Langfuse v3](https://langfuse.com) Docker Compose stack for running
-this certification pipeline against a self-hosted Langfuse instance instead of
+this deployment gate against a self-hosted Langfuse instance instead of
 [Langfuse Cloud](https://cloud.langfuse.com).
 
 This is meant for local evaluation and demos — not production. For a hardened
@@ -103,7 +103,7 @@ to `127.0.0.1:3000:3000` / `127.0.0.1:9090:9000` if you only need local access.
 
 `docker-compose.yml` is vendored from Langfuse's official v3 compose at
 <https://github.com/langfuse/langfuse/blob/main/docker-compose.yml>, shipped
-here so the certification pipeline has a known-good local stack.
+here so the deployment gate has a known-good local stack.
 
 To re-sync when Langfuse publishes a new version:
 

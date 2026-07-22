@@ -61,7 +61,7 @@ Two distinct credential planes, and keeping them separate is the security crux:
 
 - **Public path (read):** the deployed app needs only Langfuse keys with **read**
   scope. It never needs `ANTHROPIC_API_KEY` and never writes to Langfuse.
-- **Seeding/cert path (write + LLM):** `setup_*` and `run_*` need Langfuse write
+- **Seeding/gate path (write + LLM):** `setup_*` and `run_*` need Langfuse write
   access **and** `ANTHROPIC_API_KEY`. These run **off** the public surface — locally
   by an SA, or in a gated CI job — never as a public HTTP endpoint.
 
@@ -108,7 +108,7 @@ Almost nothing in code changes — the SDK and REST layer already honor
    uv run python setup_datasets.py --dataset advisory-adversarial
    uv run python setup_prompts.py
    uv run python setup_score_configs.py
-   # Pre-compute the runs the dashboard will show (model + use-case cert):
+   # Pre-compute the runs the dashboard will show (model + agent gate):
    uv run python run_certification.py --dataset certification/financebench-sample --model claude-sonnet-4-6
    uv run python run_usecase_certification.py --use-case 10k-analyst      --dataset certification/financebench-sample --model claude-sonnet-4-6
    uv run python run_usecase_certification.py --use-case sentiment-triage --dataset certification/fpb-sample            --model claude-sonnet-4-6
@@ -163,8 +163,8 @@ the deploy pipeline — the dist is git-ignored.
 
 ### 2.5 Access control
 
-The deployed backend holds a Langfuse **secret** key and renders internal-ish
-evaluation data, so **do not ship it fully open on day one.** Options, simplest
+The deployed backend holds a Langfuse **secret** key and renders the deployment
+gate's reviewable evidence, so **do not ship it fully open on day one.** Options, simplest
 first:
 
 1. **Vercel password protection** (Pro feature, zero code) — a single shared
@@ -177,7 +177,7 @@ first:
    isn't crawlable.
 
 **Verdict:** gate with (1) for the SA audience; promote to (3) public-read only for
-a deliberately curated, read-scoped, demo-only project. The **write/cert path is
+a deliberately curated, read-scoped, demo-only project. The **write/gate path is
 never exposed regardless** — it has no public route.
 
 ### 2.6 Data / datasets
@@ -185,7 +185,7 @@ never exposed regardless** — it has no public route.
 - **Public surface = fixed, pre-seeded data + pre-computed runs** (§2.2 step 3).
   Deterministic, fast, no LLM keys on the public path, no per-visit cost.
 - **Live runs = SA-only, authenticated, off the public app.** Triggering a
-  certification needs Langfuse **write** + `ANTHROPIC_API_KEY`; that belongs in a
+  deployment-gate run needs Langfuse **write** + `ANTHROPIC_API_KEY`; that belongs in a
   local run or a gated CI `workflow_dispatch`, not a public button. If we later want
   an in-app "run it live" demo, it must sit behind auth (§2.5) and use a
   server-side, budget-capped key — called out as a future enhancement, not v1.

@@ -1,4 +1,4 @@
-# Use-Case Certification — Architecture & Eval Lifecycle
+# Agent Deployment Gate — Architecture & Eval Lifecycle
 
 Companion to [`ai-engineering-loop.md`](ai-engineering-loop.md) (the objective /
 loop story), [`usecase-certification.md`](usecase-certification.md) (the
@@ -7,6 +7,11 @@ it). This document shows the architecture and maps every stage of the evaluation
 lifecycle to the Langfuse primitive and the file that owns it. The foundation
 (PR #12, issue #8) and all three agents — #9 (PR #13), #10 (PR #14), #11 (PR #15) —
 are now merged to `main`.
+
+> **Note on naming.** "Certification" is the internal name for this process — the
+> workstream, scripts, and dataset prefixes keep it. Nothing here issues a
+> certificate: the pipeline is a **deployment gate** that produces reviewable
+> evidence, and sign-off stays with the people accountable for the deployment.
 
 ---
 
@@ -62,14 +67,14 @@ are now merged to `main`.
         └─────────────────────────────┘
 ```
 
-The **only** structural differences from model certification: the `task` is a
-multi-span agent instead of one call, and the run-level gate is multi-dimensional.
-Everything else (datasets, prompts, scores, queues, portal, monitoring) is the
-shared pipeline.
+The **only** structural differences from the model deployment gate: the `task` is a
+multi-span agent instead of one call, and the run-level gate is multi-dimensional —
+every dimension must pass. Everything else (datasets, prompts, scores, queues,
+portal, monitoring) is the shared pipeline.
 
 ---
 
-## 2. The trace a certified use case emits
+## 2. The trace an agent emits under the gate
 
 One trace per dataset item; the gate aggregates across items. Example —
 10-K Analyst on a numerical-reasoning question:
@@ -115,9 +120,9 @@ Legend: ✅ wired and verified · 🟡 partially wired, has a live-unverified as
 
 ---
 
-## 4. Two certification modes, one pipeline
+## 4. Two deployment-gate modes, one pipeline
 
-| | Model certification | Use-case certification |
+| | Model deployment gate | Agent deployment gate |
 |---|---|---|
 | Entry point | `run_certification.py` | `run_usecase_certification.py` |
 | `task` | single LLM call (`create_certification_task`) | agent factory from `AGENT_REGISTRY` |

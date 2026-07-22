@@ -25,9 +25,9 @@ how to verify it.
 
 ---
 
-## 1. Base pipeline (one-time) — required before anything can re-certify
+## 1. Base pipeline (one-time) — required before anything can re-run the gate
 
-Re-certification and the feedback edges need the datasets, prompts, score configs,
+Re-running the gate and the feedback edges need the datasets, prompts, score configs,
 and review queue to exist in Langfuse. All are idempotent.
 
 - [ ] `uv run python setup_datasets.py --dataset financebench --sample`
@@ -43,7 +43,7 @@ Annotation Queues has `Certification Review`.
 
 ---
 
-## 2. GitHub Actions secrets — required for any CI re-certification
+## 2. GitHub Actions secrets — required for any CI re-run of the gate
 
 Both `certification.yml` and `prompt-recert.yml` read these.
 
@@ -59,9 +59,10 @@ Langfuse without an auth error.
 
 ---
 
-## 3. Activate Edge B — prompt promotion → automatic re-certification
+## 3. Activate Edge B — prompt promotion → automatic re-run of the gate
 
-Makes a prompt promotion in Langfuse fire `.github/workflows/prompt-recert.yml`.
+Makes a prompt promotion in Langfuse fire `.github/workflows/prompt-recert.yml`, so a
+regression fails the gate before it ships instead of waiting on manual approval.
 
 - [ ] **Create a GitHub token.** Fine-grained PAT scoped to this repo with
       **Actions: Read and write** (or a classic PAT with `repo` scope).
@@ -75,14 +76,15 @@ Makes a prompt promotion in Langfuse fire `.github/workflows/prompt-recert.yml`.
 - [ ] **Test it.** In Langfuse, move the `production` label of a managed prompt
       (e.g. `usecase-advisory-draft`) to a new version. Then GitHub → **Actions →
       Prompt Re-Certification** should show a run that goes green (gate passed) or
-      red (gate failed → the promotion regressed the use case).
+      red (gate failed → the promotion regressed the agent) — reviewable evidence
+      either way.
 - [ ] **Or test without Langfuse:** Actions → Prompt Re-Certification → **Run
       workflow** → `prompt_name = usecase-advisory-draft`.
 
 **Good to know (already handled in the workflow):**
 - *Double dispatch* — a label move fires **two** dispatches (the version gaining
   `production` and the one losing it). The job runs only for the version that now
-  carries `production`, so it re-certifies the deployed version exactly once.
+  carries `production`, so it re-runs the gate on the deployed version exactly once.
 - *Payload truncation* — GitHub truncates large `client_payload`, so routing is by
   prompt **name**; the run fetches the live `production` prompt from Langfuse itself.
 
@@ -100,7 +102,7 @@ step 1.
       decide the correct answer for real failures.
 - [ ] Promote a reviewed trace into the golden dataset (human-gated):
       `uv run python promote_trace_to_dataset.py --dataset certification/financebench-sample --from-queue --expected "<correct answer>"`
-- [ ] Re-certify so the scenario is now a regression test:
+- [ ] Re-run the gate so the scenario is now a regression test:
       `uv run python run_usecase_certification.py --use-case 10k-analyst --dataset certification/financebench-sample --ci`
 
 **Verify:** the dataset gains a `prod-<traceId>` item (metadata
@@ -111,7 +113,7 @@ step 1.
 ## 5. (Optional) Edge B audit archive — sync prompt versions to git
 
 Commits every prompt version to git as an auditable archive (separate from the
-re-certification trigger in §3). This needs a **hosted webhook server**, so it is
+gate re-run trigger in §3). This needs a **hosted webhook server**, so it is
 out of scope for this repo — follow the Langfuse guide if you want it:
 
 - [ ] Deploy the sample FastAPI sync server (Render/Fly/Heroku/…), set
@@ -128,7 +130,7 @@ out of scope for this repo — follow the Langfuse guide if you want it:
 | Capability | How to confirm |
 |---|---|
 | Base pipeline | The four `setup_*` verifications in §1 |
-| CI re-cert can auth | LLM Certification workflow runs green (§2) |
+| CI gate can auth | LLM Certification workflow runs green (§2) |
 | Edge B live | Promote a prompt → Prompt Re-Certification workflow fires (§3) |
 | Edge A monitor→queue | `monitor_production.py --queue-violations` adds items to Certification Review |
 | Edge A trace→dataset | `promote_trace_to_dataset.py` creates a `prod-<traceId>` item |
@@ -142,4 +144,4 @@ out of scope for this repo — follow the Langfuse guide if you want it:
   trace (or fills `needs_expected_review` in the UI). We never treat a flagged
   trace's output as ground truth.
 - **One-click UI promotion.** Promotion is a deliberate CLI step, not a UI button —
-  the right friction for changing what counts as "golden" in a regulated use case.
+  the right friction for changing what counts as "golden" for a regulated AI agent.

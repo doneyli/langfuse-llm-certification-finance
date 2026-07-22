@@ -1,10 +1,16 @@
-# Use-Case Certification — Implementation Spec
+# Agent Deployment Gates — Implementation Spec
 
-> **Driver:** Customer feedback — model risk management is moving *beyond certifying
-> models* toward **certifying use cases**. A use case is an *agent* (a system of
-> LLM calls + tools + retrieval) deployed for a specific business purpose. It is
-> certified only if the **whole system** clears every production-readiness bar at
-> once — not just "did the model get the number right."
+> **Driver:** Customer feedback — model risk management is moving *beyond gating
+> models* toward **gating whole agents**. An *agent* is a system of LLM calls +
+> tools + retrieval deployed for a specific business purpose. It clears the gate
+> only if the **whole system** passes every production-readiness bar at once —
+> accuracy, groundedness, compliance, and tool use all clearing together — not
+> just "did the model get the number right."
+
+> **Note:** "Certification" is the internal name for this process — it appears in
+> the repo, dataset, and script names. Nothing here issues a certificate: the
+> pipeline is a deployment gate that produces reviewable evidence, and sign-off
+> stays with people.
 
 **Related docs:** [`ai-engineering-loop.md`](ai-engineering-loop.md) (the objective
 + how it forms Langfuse's AI Engineering Loop) · [`usecase-architecture.md`](usecase-architecture.md)
@@ -12,11 +18,11 @@
 (runbook + demo narration) · [`../scripts/demo_usecase.sh`](../scripts/demo_usecase.sh)
 (runnable demo scaffold).
 
-This is the implementation specification for three certifiable agents plus the
+This is the implementation specification for three agents that must clear the deployment gate, plus the
 shared foundation they sit on. It is written to be handed to an implementer: each
 section lists files, function signatures, trace structure, dependencies, and
 acceptance criteria. It **reuses** the existing pipeline (`run_certification.py`,
-`evaluators.py`, `setup_datasets.py`, the portal) — the model-cert path is left
+`evaluators.py`, `setup_datasets.py`, the portal) — the model-gate path is left
 untouched.
 
 **GitHub issues tracking this work:**
@@ -28,17 +34,17 @@ untouched.
 
 ---
 
-## 1. What changes vs. model certification
+## 1. What changes vs. the model gate
 
-Model cert and use-case cert share the same Langfuse experiment harness. Only two
-things actually differ — and they are what earn the name:
+The model gate and the agent gate share the same Langfuse experiment harness. Only
+two things actually differ — and they are what earn the name:
 
-| | Model certification (today) | Use-case certification (this spec) |
+| | Model gate (today) | Agent gate (this spec) |
 |---|---|---|
 | `task` | One LLM call → answer string | **Agent**: plan → retrieve → compute → compose, emitting a **multi-span trace** |
 | Gate | One `primary_score` ≥ threshold | **Multi-dimensional**: PASS only if *every* dimension clears at once |
 | Trace | Single flat span | Nested tree (one span per agent step) — the auditable artifact |
-| Dashboard row | `metadata.model` = model name | `metadata.model` = **use-case name** (portal groups by it → free row) |
+| Dashboard row | `metadata.model` = model name | `metadata.model` = **agent name** (portal groups by it → free row) |
 
 **Anti-pattern to avoid:** an "agent" that is one LLM call with a longer prompt. If
 a step doesn't change behavior or emit a meaningful span, it isn't a step.
@@ -181,7 +187,7 @@ Each `run_*` returns a Langfuse-compatible `task(*, item, **kwargs)` factory out
 ### 3.5 Evaluator additions (`evaluators.py`)
 
 **(a) Output-shape guard** — one line added to each existing item evaluator so they
-accept either a bare string (model cert) or the agent dict (use-case cert):
+accept either a bare string (the model gate) or the agent dict (the agent gate):
 
 ```python
 def _answer_text(output):
@@ -268,7 +274,7 @@ Behavior:
 
 - [ ] `agents/base.py` imports cleanly; `traced_generation` produces a generation
       span with model + token usage visible in Langfuse.
-- [ ] Existing model-cert run (`run_certification.py`) still passes unchanged
+- [ ] Existing model-gate run (`run_certification.py`) still passes unchanged
       (the `_answer_text` guard is backward-compatible).
 - [ ] `usecase_certification_gate` returns FAILED if *any* dimension is below
       threshold; PASSED only when all clear (unit test in `tests/`).
@@ -385,7 +391,7 @@ ITEM_EVALUATORS = [numerical_accuracy_evaluator,
       a populated `calculate` tool span; gate returns PASSED. *(Verified 2026-06-05:
       Sonnet PASSED — numerical 90%, groundedness 93%, compliance 100%, tool-use 100%.)*
 - [x] The calculator tool grounds the arithmetic, so the *system* lifts a weaker
-      model: Haiku also PASSED (~90% numerical) where model-cert shows it ~60% on
+      model: Haiku also PASSED (~90% numerical) where the model gate shows it ~60% on
       raw numerical accuracy. The FAIL story comes from the **compliance hard-gate**
       (Advisory agent, §6) or a **stricter threshold profile**, not from swapping in
       a weaker model. *(Verified 2026-06-05: Haiku PASSED.)*
@@ -487,8 +493,8 @@ ITEM_EVALUATORS = [sentiment_evaluator, regulatory_compliance_evaluator,
 
 **Business purpose:** drafts a client-facing summary from filing data. Here
 `regulatory_compliance` is a **hard gate dimension** (threshold = 1.00) — a draft
-containing "guaranteed returns" fails certification outright, regardless of accuracy.
-This is the use case that demonstrates compliance as a *gate*, not a metric.
+containing "guaranteed returns" fails the gate outright, regardless of accuracy.
+This is the agent that demonstrates compliance as a *gate*, not a metric.
 
 ### 6.1 File: `agents/advisory_draft.py`
 
@@ -549,8 +555,8 @@ ITEM_EVALUATORS = [groundedness_evaluator, regulatory_compliance_evaluator,
 Add 1–2 adversarial dataset items (or a system-prompt nudge) that tempt the model
 into "guaranteed returns" / "risk-free" language. The
 `regulatory_compliance` dimension drops below 1.00 → gate FAILS even if groundedness
-and completeness are perfect. This is the clearest illustration of *use-case* cert:
-a perfectly accurate answer can still be uncertifiable.
+and completeness are perfect. This is the clearest illustration of the agent
+deployment gate: a perfectly accurate answer can still fail the gate.
 
 ### 6.5 Acceptance criteria
 
@@ -561,8 +567,8 @@ a perfectly accurate answer can still be uncertifiable.
       `advisory-adversarial`: default run PASSED — groundedness 100%, compliance
       100%, completeness 95%, tool-use 100%. `ADVISORY_TEMPT_NONCOMPLIANT=1` run
       FAILED — groundedness 86% PASS, completeness 100% PASS, tool-use 100% PASS,
-      but `regulatory_compliance` 0% FAIL → certification FAILED. A grounded,
-      complete draft is still uncertifiable.)*
+      but `regulatory_compliance` 0% FAIL → the gate FAILED. A grounded,
+      complete draft still fails the gate.)*
 - [x] `trajectory.compliance_checked == True` on every item.
 
 > **FAIL-path note (learned during #11):** an aligned model rarely emits prohibited
@@ -606,7 +612,7 @@ uv run python run_usecase_certification.py --use-case advisory-draft \
    unit tests for the gate + trajectory evaluator. *Blocks the rest.*
 2. **Agent 1** (§4) — reference implementation; prove the trace tree + PASS/FAIL.
 3. **Agent 2** (§5) and **Agent 3** (§6) — parallelizable once Agent 1 validates the pattern.
-4. Docs: README "Use-Case Certification" section; update `docs/evaluation-gaps.md` if relevant.
+4. Docs: README "Gating the whole agent" section; update `docs/evaluation-gaps.md` if relevant.
 
 ## 9. Open questions for the implementer
 

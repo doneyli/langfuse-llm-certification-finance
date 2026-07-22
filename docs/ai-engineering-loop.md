@@ -1,25 +1,28 @@
-# The AI Engineering Loop — this use case, end to end
+# The AI Engineering Loop — this AI agent, end to end
 
 > **Read this first if you want the *objective*, not the plumbing.** The
 > [architecture doc](usecase-architecture.md) maps components; the
 > [spec](usecase-certification.md) is the implementation; the
 > [runbook](usecase-runbook.md) is how to operate it. This doc is the **story**:
-> how a financial-services LLM use case moves through
+> how a financial-services AI agent moves through
 > [Langfuse's AI Engineering Loop](https://langfuse.com/academy/ai-engineering-loop)
 > — Trace → Monitor → Build Datasets → Experiment → Evaluate — and keeps moving,
-> because a use case is never "certified once." It is certified *and re-certified*
+> because an AI agent is never "gated once." It clears the gate *and is re-gated*
 > as prompts, models, and the world change.
 
 ## The objective
 
-Model-risk feedback reframed the problem: stop certifying *models* in
-isolation, start certifying *use cases* — the whole agent (LLM calls + tools +
-retrieval) deployed for a business purpose. But "certify the use case" is only
-half the shift. The other half is **continuity**. A model-risk sign-off that is
-true on the day of the run and stale a week later is worthless once the prompt is
-edited, the model is swapped, or production drifts.
+Model-risk feedback reframed the problem: stop gating *models* in
+isolation, start gating *whole agents* — LLM calls + tools + retrieval
+deployed for a business purpose. This is a **deployment gate** on the agent
+("certification" is only the internal name — nothing here issues a certificate;
+the gate produces reviewable evidence, and sign-off stays with people). But
+gating the agent is only half the shift. The other half is **continuity**. A
+model-risk sign-off that is true on the day of the run and stale a week later is
+worthless once the prompt is edited, the model is swapped, or production drifts.
 
-The AI Engineering Loop is the answer to *"how do you stay certified?"* It is a
+The AI Engineering Loop is the answer to *"how do you keep the gate green as
+things change?"* It is a
 **cycle**, not a checklist: production behavior feeds measurement, measurement
 feeds test data, test data feeds experiments, experiments feed the ship/no-ship
 decision, and the shipped change flows back into production — where the loop
@@ -87,7 +90,7 @@ cycle runs today on `main` (all three agents assembled — see
 > *Academy:* "Capture the full path of a request, including prompts, retrieved
 > context, tool calls, outputs, latency, and cost."
 
-**This use case.** The 10‑K Analyst is not one LLM call — it is a four-step agent,
+**This agent.** The 10‑K Analyst is not one LLM call — it is a four-step agent,
 and each step is a span, so the trace *is* the audit artifact a model-risk
 reviewer opens:
 
@@ -113,7 +116,7 @@ trace per item. **See it:** Langfuse UI → **Datasets** → run → open an ite
 > *Academy:* "Track how the system behaves over time and surface the traces that
 > deserve attention."
 
-**This use case.** `monitor_production.py` runs on a schedule against *live*
+**This agent.** `monitor_production.py` runs on a schedule against *live*
 traffic (not the eval set): it fetches recent traces, runs the deterministic
 `regulatory_compliance` and `completeness` evaluators on any unscored trace, posts
 the scores back, and **exits non-zero on a compliance violation** so it wires into
@@ -135,7 +138,7 @@ Queues → Certification Review**.
 > *Academy:* "Turn real scenarios surfaced through monitoring and expected
 > scenarios you design during development into repeatable test cases."
 
-**This use case.** Two sources, exactly as the academy describes:
+**This agent.** Two sources, exactly as the academy describes:
 - **Designed** — the golden benchmarks: `setup_datasets.py` loads FinanceBench
   (SEC-filing QA) and FPB (sentiment) as `certification/*-sample` datasets.
 - **Adversarial by design** — `sample_data/advisory_adversarial.json`: items
@@ -154,14 +157,14 @@ Queues → Certification Review**.
 > strategy — and compare each change against a stable baseline or other
 > experimental setups."
 
-**This use case.** `run_usecase_certification.py --use-case 10k-analyst` runs the
+**This agent.** `run_usecase_certification.py --use-case 10k-analyst` runs the
 agent once per dataset item via Langfuse `run_experiment`, producing one comparable
 run. You change **one variable** and re-run to compare:
 - **Model** — `--model claude-sonnet-4-6` vs `--model claude-haiku-4-5-20251001`.
   The headline result: the *system* lifts a weaker model. Haiku alone scores ~60%
-  raw numerical accuracy, but wrapped in the calculator tool the **use case** still
+  raw numerical accuracy, but wrapped in the calculator tool the **agent** still
   PASSES at ~90% — because the arithmetic is grounded in a tool, not the model's
-  head. *You are certifying the system, not the model.*
+  head. *You are gating the system, not the model.*
 - **Prompt** — the free-form `compose`/`draft` steps fetch a `production`-labelled
   Langfuse prompt (`cert_common.get_managed_prompt`, hardcoded fallback). Edit and
   version it in the UI, promote a new version, re-run — the runs compare on the
@@ -177,9 +180,9 @@ variable. **See it:** UI → **Datasets** → run comparison; Portal → dashboa
 > *Academy:* "Decide whether results are good enough to ship using manual review,
 > code evaluator checks, or LLM-as-a-judge."
 
-**This use case.** All three evaluation methods are present, and the ship decision
-is a **multi-dimensional gate** — the mechanic that earns the name *use-case*
-certification. `usecase_certification_gate` (in `evaluators.py`) returns PASS
+**This agent.** All three evaluation methods are present, and the ship decision
+is a **multi-dimensional gate** — the mechanic that makes it a *whole-agent*
+deployment gate. `usecase_certification_gate` (in `evaluators.py`) returns PASS
 **only if every dimension clears at once**:
 
 | Method | Evaluator | Dimension |
@@ -191,10 +194,10 @@ certification. `usecase_certification_gate` (in `evaluators.py`) returns PASS
 | Manual | annotation queue | human sign-off / evaluator calibration |
 
 The clearest illustration is the **advisory-draft** agent: an answer can be
-perfectly accurate and grounded and still be **uncertifiable** because it contains
+perfectly accurate and grounded and still **fail the gate** because it contains
 one prohibited phrase — `regulatory_compliance` drops below 1.00 and the gate FAILS
 regardless of the other dimensions. *Accurate ≠ shippable.* That is the whole point
-of gating the use case rather than scoring the model.
+of gating the whole agent rather than scoring the model.
 
 **Langfuse primitive:** Scores + Score Configs + the run-level
 `certification_result` gate. **See it:** the `certification_result` score comment
@@ -244,23 +247,23 @@ trace's output is suspect, and auto-promoting it would poison the golden set. Th
 reviewer supplies the correct answer (`--expected`) or the item is flagged
 `needs_expected_review` for a human to complete in the Langfuse UI before it counts.
 So the loop closes, but a person still authorizes what becomes "golden" — the right
-control for a regulated use case.
+control for a regulated AI agent.
 
 **Still open:** a *one-click* UI promotion (annotate → add to dataset without the
 CLI) is not built; the promotion is a deliberate CLI step.
 
-### Edge B — Ship → Re-certify (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *receiver implemented; needs Langfuse config + first live dispatch*
+### Edge B — Ship → Re-run the gate (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *receiver implemented; needs Langfuse config + first live dispatch*
 
 This is the *"is the GitHub integration part of a true CI/CD pipe?"* question, and
 the answer is **yes — it is exactly the mechanism that turns prompt promotion into
-governed, auditable, automatic re-certification.** Here is how it fits, and what
+governed, auditable, automatic re-runs of the gate.** Here is how it fits, and what
 this repo now wires.
 
 **Where prompts sit in the loop.** The `compose`/`draft` steps are managed Langfuse
 prompts with a `production` label. Promoting a new version *is* a deploy — it
-changes production behavior with no code change. In a regulated finance use case,
+changes production behavior with no code change. In a regulated finance setting,
 an un-governed prompt edit is precisely the risk model-risk teams worry about: the
-certified artifact silently drifts.
+gated artifact silently drifts.
 
 **What Langfuse's GitHub integration does** (Langfuse → GitHub, one-way; Langfuse
 is the source of truth):
@@ -286,7 +289,7 @@ gate FAIL → workflow red → alert / roll back the label ◀┘
 ```
 
 That is the governance story: **a prompt can never be silently promoted to
-production without automatically re-running use-case certification, and every
+production without automatically re-running the agent's deployment gate, and every
 version is committed to git for audit.** Experiment + Evaluate fire on every
 prompt change, not just on a code push.
 
@@ -294,11 +297,11 @@ prompt change, not just on a code push.
 - ✅ Managed prompts with `production` label + fallback (`setup_prompts.py`,
   `cert_common.get_managed_prompt`).
 - ✅ A CI gate exists: `run_usecase_certification.py --ci` exits non-zero on gate
-  FAIL, and `.github/workflows/certification.yml` runs certification in Actions.
+  FAIL, and `.github/workflows/certification.yml` runs the gate in Actions.
 - ✅ **`repository_dispatch` receiver implemented** (offline-tested; first live
   dispatch pending). `.github/workflows/prompt-recert.yml`
   listens for `repository_dispatch` (`event_type: langfuse-prompt-update`), maps the
-  changed prompt to its use-case / model target (`scripts/recert_for_prompt.py`),
+  changed prompt to its agent / model target (`scripts/recert_for_prompt.py`),
   and re-runs the gate with `--ci`. It dedups Langfuse's double-dispatch by acting
   only on the version now carrying `production`, and routes on prompt *name* (not
   payload content, which GitHub truncates). A `workflow_dispatch` input makes it
@@ -321,7 +324,7 @@ prompt change, not just on a code push.
 | 4 Experiment | Experiments; prompt versions | ✅ wired (model / prompt / threshold comparisons) |
 | 5 Evaluate | Scores + multi-dim gate | ✅ wired (`usecase_certification_gate`) |
 | **A** Monitor → Dataset | `--queue-violations` → review → `promote_trace_to_dataset.py` | ✅ implemented + offline-tested (human-gated); pending first live run; one-click UI promotion open |
-| **B** Prompt promote → re-cert | GitHub `repository_dispatch` + sync webhook | 🟡 receiver implemented + offline-tested (`prompt-recert.yml`); needs one-time Langfuse config + first live dispatch; sync-to-repo open |
+| **B** Prompt promote → re-run gate | GitHub `repository_dispatch` + sync webhook | 🟡 receiver implemented + offline-tested (`prompt-recert.yml`); needs one-time Langfuse config + first live dispatch; sync-to-repo open |
 
 ---
 
@@ -342,10 +345,10 @@ narration:
 3. **Experiment** — re-run on Haiku; the *system* still PASSES (calculator lift).
 4. **Evaluate (the FAIL)** — advisory-draft on the adversarial item: perfectly
    accurate, but one prohibited phrase → compliance < 100% → **gate FAILS**.
-   *Accurate but uncertifiable.*
+   *Accurate but can't clear the gate.*
 5. **Monitor + close the loop** — point at `monitor_production.py` on live traffic,
    then show both feedback edges: a flagged trace → `promote_trace_to_dataset.py` →
-   golden data (Edge A), and a prompt promotion → auto re-certification (Edge B).
+   golden data (Edge A), and a prompt promotion → auto re-run of the gate (Edge B).
    Both are implemented; activating them (and the first live run) is a one-time
    console step ([activation checklist](loop-activation-checklist.md)).
 
