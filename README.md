@@ -9,6 +9,8 @@ as the analytics backend.
 
 📖 **Companion blog post:** [Building Deployment Gates for LLMs and AI Agents in Financial Services](https://langfuse.com/blog/2026-07-15-llm-certification-financial-services) — the story and reasoning behind this repo.
 
+🤖 **Coding agents:** start with [`AGENTS.md`](AGENTS.md) — the golden path, credential checkpoints, preconditions, and success checks in one place (`make quickstart`). It also covers the [Langfuse CLI](https://langfuse.com/docs/api-and-data-platform/features/cli) and [agent skill](https://langfuse.com/docs/api-and-data-platform/features/agent-skill) for driving your Langfuse deployment.
+
 > **A note on the word "certification."** It's the internal name we used for this
 > process while building it, and it survives in the repository name, the dataset
 > names, the script names, and the screenshots below. Nothing here issues a
@@ -603,6 +605,24 @@ Some metrics can also be visualized using [Langfuse Custom Dashboards](https://l
 2. **Compliance violations** — bar chart, `scores-numeric` view, filter `name=regulatory_compliance`, filter `value=0`, measure `count`
 3. **Score distribution** — bar chart, `scores-numeric` view, measure `avg(value)`, dimension `name`
 4. **Cost by model** — bar chart, `observations` view, measure `sum(totalCost)`, dimension `providedModelName`
+
+## Interacting with Langfuse: CLI & agent skill
+
+Beyond the portal and the Python scripts, Langfuse ships two tools that make it
+much easier — especially for **coding agents** — to inspect and drive a live
+Langfuse deployment. Both authenticate with the **same `.env` credentials** this
+repo already uses (no extra login), and neither is required to run the gate.
+
+- **[Langfuse CLI](https://langfuse.com/docs/api-and-data-platform/features/cli)** — a thin wrapper over the full REST API. Quick checks after a run:
+  ```bash
+  npx langfuse-cli --env .env api datasets list          # confirm golden datasets loaded
+  npx langfuse-cli --env .env api traces list --limit 10 # recent gate-run traces
+  npx langfuse-cli --env .env api prompts list           # managed prompts
+  ```
+  (Install once with `npm i -g langfuse-cli`, then call it as `langfuse api …`.)
+- **[Langfuse agent skill](https://langfuse.com/docs/api-and-data-platform/features/agent-skill)** — an Agent-Skills-standard skill (Claude Code, Cursor, Windsurf…) that teaches an agent Langfuse best practices and drives the CLI: query traces, build datasets, migrate prompts. Add it with `npx skills add langfuse/skills --skill "langfuse"`.
+
+See [`AGENTS.md`](AGENTS.md) for how these fit the end-to-end agentic workflow.
 
 ## Keeping the evidence current
 
