@@ -29,6 +29,13 @@ on:
         required: false
         default: 'claude-sonnet-4-6'
 
+# Label changes in the Langfuse UI arrive in bursts, and each dispatch triggers a
+# full re-certification run (real LLM spend, up to 30 min). Keep only the newest
+# per prompt — an older run of the same prompt is answering a stale question.
+concurrency:
+  group: recert-${{ github.event.client_payload.prompt.name || github.event.inputs.prompt_name }}
+  cancel-in-progress: true
+
 env:
   LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
   LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}

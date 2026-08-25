@@ -66,7 +66,11 @@ from evaluators import (
     average_score_evaluator,
     certification_gate,
 )
-from cert_common import persist_run_evaluations, queue_failed_items
+from cert_common import (
+    model_gate_threshold,
+    persist_run_evaluations,
+    queue_failed_items,
+)
 
 
 # --------------- CLI ---------------
@@ -85,8 +89,13 @@ def parse_args():
                         help="LLM API base URL (default: LLM_BASE_URL env)")
     parser.add_argument("--max-concurrency", type=int, default=5,
                         help="Max concurrent LLM calls (default: 5)")
-    parser.add_argument("--threshold", type=float, default=0.85,
-                        help="Certification pass threshold (default: 0.85)")
+    # Default comes from cicd/thresholds.json so the model bar is reviewable in
+    # the same file as the agent gates, rather than being a constant here.
+    _default_threshold = model_gate_threshold()
+    parser.add_argument("--threshold", type=float, default=_default_threshold,
+                        help=f"Certification pass threshold "
+                             f"(default: {_default_threshold:.2f}, from "
+                             f"cicd/thresholds.json)")
     parser.add_argument("--run-name", type=str, default=None,
                         help="Custom run name (default: auto-generated)")
     parser.add_argument("--evaluators", type=str, default="all",

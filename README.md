@@ -476,8 +476,10 @@ single accuracy score.
 | Dashboard row | model name | `usecase:<name>` |
 | Models | any OpenAI-compatible endpoint or Claude | Claude only (agents call the native Anthropic SDK) |
 
-**The three registered agents** — each defines its own trace shape and gate
-(dimensions and thresholds live in the agent registry, not in a CLI flag):
+**The three registered agents** — each defines its own trace shape and gate.
+Which dimensions an agent gates on is a property of the agent; the thresholds
+themselves live in [`cicd/thresholds.json`](cicd/thresholds.json), never in a CLI
+flag:
 
 | Agent | Steps (spans) | Gate — all must pass |
 |----------|--------------------|----------------------|
@@ -525,6 +527,7 @@ registry, tracing helpers) plus all three agents are on `main`. See:
 - [`docs/usecase-architecture.md`](docs/usecase-architecture.md) — architecture + eval-lifecycle component map
 - [`docs/usecase-runbook.md`](docs/usecase-runbook.md) — runbook + demo narration
 - [`docs/hosting-demo.md`](docs/hosting-demo.md) — plan for hosting a public read-only demo (Vercel + Langfuse Cloud; designed, not yet executed)
+- [`cicd/README.md`](cicd/README.md) — **the quality bar as code**: every gate threshold in one reviewable file, the hard-vs-loose split, what no bar covers, and what this repo deliberately does *not* run in CI
 
 ## A portal for the people who sign off
 
@@ -772,6 +775,24 @@ uv run python run_certification.py \
   --ci
 ```
 
+Or run an agent gate exactly the way CI runs it (`--ci`, no failure queueing):
+
+```bash
+make ci-gate USE_CASE=advisory-draft
+```
+
+#### The quality bar as code
+
+Every gate bar — the four agent gates and the model-cert default threshold —
+lives in [`cicd/thresholds.json`](cicd/thresholds.json), not in the agent
+modules. Loosening a bar is therefore a reviewable diff in a pull request, and
+[`cicd/README.md`](cicd/README.md) explains the hard-vs-loose split, what no bar
+covers (persona and tone are not gated), and why a missing entry raises rather
+than defaulting — `usecase_certification_gate` is `all()` over the dimensions it
+is given, so an empty gate would certify everything as PASSED.
+`tests/test_gate_thresholds.py` fails on any drift between the file and the agent
+registry, and on a gated dimension that no evaluator produces.
+
 #### Pytest gates
 
 The test suite splits into an **offline suite** (no credentials, runs on every PR) and a **live gate** (real gate runs against Langfuse):
@@ -789,7 +810,8 @@ uv run pytest --ignore=tests/test_certification.py -v
 | `test_sentiment_triage.py` | Sentiment Triage: label/confidence parsing, driver phrases, confidence routing |
 | `test_advisory_draft.py` | Advisory Draft: 3-span flow, compliance self-check, hard compliance-FAIL gate |
 | `test_promote_trace_to_dataset.py` | Loop Edge A: deterministic `prod-<traceId>` ids, never-copy-suspect-output guard |
-| `test_recert_for_prompt.py` | Loop Edge B: prompt→target routing, `--ci` wiring, drift guard vs `setup_prompts.py` |
+| `test_recert_for_prompt.py` | Loop Edge B: prompt→target routing, `--ci` wiring, drift guard vs `setup_prompts.py`, skip-vs-pass job summary |
+| `test_gate_thresholds.py` | The quality bar: registry↔`cicd/thresholds.json` drift, every gated dimension has an evaluator, a missing bar raises instead of certifying everything |
 
 **Live gate** — `tests/test_certification.py` runs real experiments and asserts pass/fail. Requires Langfuse credentials, `ANTHROPIC_API_KEY`, and seeded datasets; it runs in the `certification.yml` workflow, not on PRs:
 
@@ -825,6 +847,18 @@ To trigger manually: **Actions** > **LLM Certification** > **Run workflow** > ch
 - **Triggers:** `repository_dispatch` with event type `langfuse-prompt-update` — fired by a Langfuse prompt automation when a prompt version gains the `production` label (see [`docs/loop-activation-checklist.md`](docs/loop-activation-checklist.md) for the one-time Langfuse-side setup) — plus manual `workflow_dispatch` (`prompt_name` required, `model` defaults to `claude-sonnet-4-6`) so it's testable without the webhook
 - **Behavior:** runs [`scripts/recert_for_prompt.py`](#scriptsrecert_for_promptpy--feedback-loop-prompt-promotion--re-run-the-gate) to map the promoted prompt to its gate target and re-run it with `--ci`. A guard skips dispatches whose payload labels don't include `production` (Langfuse dispatches twice — label gained and label lost)
 - **Secrets required:** same four as `certification.yml`
+
+Both live workflows carry a `concurrency` group with `cancel-in-progress`, keyed
+on the ref (`certification.yml`) or the changed prompt name (`prompt-recert.yml`).
+A burst of label changes in the Langfuse UI would otherwise queue several full
+gate runs, each one real LLM spend, all answering a question a newer run has
+already superseded.
+
+`recert_for_prompt.py` also writes a verdict to `$GITHUB_STEP_SUMMARY`, so the
+outcome is readable in the run summary without opening logs. That matters most
+for the **skip** case: a prompt that maps to no gate target exits 0, which renders
+as a green check indistinguishable from "the gate ran and passed". The summary
+states explicitly that no gate was run and the job makes no claim about quality.
 
 The workflows are deployment-agnostic — point `LANGFUSE_BASE_URL` at Cloud or at a self-hosted Langfuse reachable from GitHub Actions runners (e.g. a publicly-resolvable hostname, a VPN/tunnel, or a self-hosted runner inside your network).
 

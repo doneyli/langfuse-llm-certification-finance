@@ -28,6 +28,13 @@ on:
       - '.python-version'
       - '.env.example'
 
+# Four gate jobs, each a real experiment against Langfuse costing real LLM
+# tokens. Without this, a burst of pushes to main queues several full sets and
+# they all bill. A newer commit supersedes an older one, so cancel the old run.
+concurrency:
+  group: certification-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
   LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}

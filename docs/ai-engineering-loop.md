@@ -297,7 +297,16 @@ prompt change, not just on a code push.
 - ✅ Managed prompts with `production` label + fallback (`setup_prompts.py`,
   `cert_common.get_managed_prompt`).
 - ✅ A CI gate exists: `run_usecase_certification.py --ci` exits non-zero on gate
-  FAIL, and `.github/workflows/certification.yml` runs the gate in Actions.
+  FAIL, and `.github/workflows/certification.yml` wires it up as an Actions job
+  (`make ci-gate` runs the identical command locally).
+- ✅ The bars the gate enforces are **a reviewable file**, not constants in the
+  agent modules — [`cicd/thresholds.json`](../cicd/thresholds.json), guarded
+  against drift by `tests/test_gate_thresholds.py`.
+- 🟡 **`certification.yml` is disabled in this repo, on purpose.** It is shared
+  with clients, so it carries no secrets; live gate runs happen locally. The
+  workflow needs `LANGFUSE_*` + `ANTHROPIC_API_KEY` and a runner that can reach
+  Langfuse (Cloud, or a publicly reachable self-hosted instance — not
+  `localhost`) before it can execute. See [`cicd/README.md`](../cicd/README.md).
 - ✅ **`repository_dispatch` receiver implemented** (offline-tested; first live
   dispatch pending). `.github/workflows/prompt-recert.yml`
   listens for `repository_dispatch` (`event_type: langfuse-prompt-update`), maps the
@@ -324,7 +333,8 @@ prompt change, not just on a code push.
 | 4 Experiment | Experiments; prompt versions | ✅ wired (model / prompt / threshold comparisons) |
 | 5 Evaluate | Scores + multi-dim gate | ✅ wired (`usecase_certification_gate`) |
 | **A** Monitor → Dataset | `--queue-violations` → review → `promote_trace_to_dataset.py` | ✅ implemented + offline-tested (human-gated); pending first live run; one-click UI promotion open |
-| **B** Prompt promote → re-run gate | GitHub `repository_dispatch` + sync webhook | 🟡 receiver implemented + offline-tested (`prompt-recert.yml`); needs one-time Langfuse config + first live dispatch; sync-to-repo open |
+| **B** Prompt promote → re-run gate | GitHub `repository_dispatch` + sync webhook | 🟡 receiver implemented + offline-tested (`prompt-recert.yml`, deduped + concurrency-guarded, renders a skip-vs-pass verdict to the job summary); needs one-time Langfuse config + first live dispatch; sync-to-repo open |
+| The quality bar | Thresholds as code | ✅ `cicd/thresholds.json` — one reviewable file for all four gates, drift-tested |
 
 ---
 
