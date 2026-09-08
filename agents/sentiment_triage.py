@@ -35,7 +35,7 @@ from agents.base import (
     traced_span,
     traced_tool,
 )
-from cert_common import get_managed_prompt
+from cert_common import agent_gate_thresholds, get_managed_prompt
 from evaluators import (
     sentiment_evaluator,
     regulatory_compliance_evaluator,
@@ -187,11 +187,11 @@ def run_sentiment_triage(*, model: str, route_threshold: float = ROUTE_THRESHOLD
 # weak classifier dropping `sentiment_accuracy` below 85%, not routing. Scoring
 # whether the routing *action* itself was correct would need labelled
 # escalate/accept ground truth, which FPB does not carry — noted as a future eval.
-GATE_SENTIMENT_TRIAGE = {
-    "sentiment_accuracy": 0.85,     # core correctness vs FPB gold
-    "regulatory_compliance": 1.00,  # no prohibited phrases leak into the label
-    "tool_use_correctness": 1.00,   # the route tool must run on every item
-}
+# Bars live in cicd/thresholds.json (see that file for the hard-vs-loose
+# rationale). Gated: sentiment_accuracy (vs FPB gold), regulatory_compliance
+# (hard — no prohibited phrase leaks into the label), tool_use_correctness
+# (hard — the route tool must run on every item).
+GATE_SENTIMENT_TRIAGE = agent_gate_thresholds("sentiment-triage")
 
 ITEM_EVALUATORS = [
     sentiment_evaluator,

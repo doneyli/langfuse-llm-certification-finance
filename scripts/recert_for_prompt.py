@@ -21,10 +21,17 @@ Usage:
 
 Exit code: 0 if every mapped re-cert passed (or the prompt maps to nothing),
 1 if any mapped re-cert failed its gate.
+
+A verdict is also written to ``$GITHUB_STEP_SUMMARY`` when running in Actions, so
+the outcome is readable in the run summary without opening logs. That matters most
+for the *skip* case: an unmapped prompt exits 0, which renders as a green check —
+indistinguishable from "the gate ran and passed" unless the run says otherwise.
+A skip makes no claim about quality, and the summary states so explicitly.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -81,6 +88,61 @@ def resolve_recert_plan(prompt_name: str, *, model: str | None = None) -> list[R
     return []
 
 
+def render_summary(prompt_name: str, model: str | None, jobs: list[RecertJob],
+                   results: list[int] | None = None) -> str:
+    """Markdown verdict for the Actions run summary.
+
+    ``results`` holds one exit code per job, positionally — not keyed by label,
+    so two jobs sharing a label cannot collapse a FAILED into a PASSED. Passing
+    ``None`` renders the plan only (used for the skip case, where nothing runs).
+    """
+    lines = ["### Prompt re-certification", "",
+             "| field | value |", "|---|---|",
+             f"| prompt | `{prompt_name}` |",
+             f"| model | `{model or 'default'}` |"]
+
+    if not jobs:
+        lines += [
+            "", "### ⏭️ Skipped — nothing to re-certify", "",
+            f"`{prompt_name}` maps to no certification target in "
+            f"`scripts/recert_for_prompt.py`.", "",
+            "> This is a deliberate routing decision, not a passing gate. No gate "
+            "was run, so this job makes **no claim** about quality. If this prompt "
+            "*should* be gated, add it to the routing map.",
+        ]
+        return "\n".join(lines) + "\n"
+
+    lines += [f"| targets | {len(jobs)} |", "",
+              "| target | verdict |", "|---|---|"]
+    for i, job in enumerate(jobs):
+        if results is None:
+            verdict = "queued"
+        else:
+            code = results[i]
+            verdict = "✅ PASSED" if code == 0 else f"❌ FAILED (exit {code})"
+        lines.append(f"| {job.label} | {verdict} |")
+
+    if results is not None and any(results):
+        lines += ["", "**Gate failed — this prompt version must not stay on "
+                      "`production`.** Roll the label back to the previous "
+                      "version, or fix the regression and re-promote."]
+    elif results is not None:
+        lines += ["", "All mapped gates passed for the live `production` prompt."]
+    return "\n".join(lines) + "\n"
+
+
+def write_summary(report: str) -> None:
+    """Append the verdict to the Actions job summary, if we are in Actions."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a") as fh:
+            fh.write(report)
+    except OSError as e:  # a broken summary must never fail the gate
+        print(f"[recert] warning: could not write job summary: {e}", file=sys.stderr)
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Re-certify targets affected by a prompt change")
     ap.add_argument("--prompt-name", required=True,
@@ -96,17 +158,21 @@ def main(argv=None) -> int:
 
     if not jobs:
         print(f"[recert] prompt '{args.prompt_name}' maps to no certification "
-              f"target — nothing to re-certify.")
+              f"target — nothing to re-certify. This makes no claim about quality.")
+        write_summary(render_summary(args.prompt_name, args.model, jobs))
         return 0
 
-    failures = 0
+    results: list[int] = []
     for job in jobs:
         print(f"\n[recert] {job.label}\n[recert] $ {' '.join(job.argv)}", flush=True)
         rc = subprocess.call(job.argv)
+        results.append(rc)
         if rc != 0:
-            failures += 1
             print(f"[recert] FAILED gate: {job.label} (exit {rc})", file=sys.stderr)
 
+    write_summary(render_summary(args.prompt_name, args.model, jobs, results))
+
+    failures = sum(1 for rc in results if rc != 0)
     if failures:
         print(f"\n[recert] {failures} re-certification(s) failed the gate.", file=sys.stderr)
         return 1

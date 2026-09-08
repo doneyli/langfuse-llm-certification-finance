@@ -128,8 +128,13 @@ Use these to answer "did the gate run actually land?" — e.g. after `make gate`
 - **Long local runs can hang** (OTel queue saturation against a slow local
   Langfuse). Stick to the `-sample` datasets locally; the full 150-item FinanceBench
   run is happier on Cloud. See README "Troubleshooting: hangs on long runs".
-- **CI gating:** `make gate` reports PASS/FAIL but always exits 0. To fail a
-  pipeline on a bad gate, run the script with `--ci` (exits 1 unless the gate passes).
+- **CI gating:** `make gate` and `make agent-gate` report PASS/FAIL but always
+  exit 0. To fail a pipeline on a bad gate, run the script with `--ci` (exits 1
+  unless the gate passes) — or `make ci-gate`, which is the agent gate with `--ci`.
+- **Thresholds are not in the code:** every gate bar lives in
+  `cicd/thresholds.json`. Edit that file, not the agent modules;
+  `tests/test_gate_thresholds.py` fails on drift. A missing entry raises rather
+  than defaulting, because an empty gate would certify everything as PASSED.
 - **Agent gate is Claude-only** (agents call the native Anthropic SDK); the model
   gate accepts any OpenAI-compatible endpoint.
 

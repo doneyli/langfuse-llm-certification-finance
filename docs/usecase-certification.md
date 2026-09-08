@@ -366,6 +366,12 @@ usecase:10k-analyst                                  (trace = experiment item)
 
 ### 4.4 Gate profile
 
+> **As shipped, the numbers are not inline.** The thresholds below are the design
+> intent; the live bars are read from [`cicd/thresholds.json`](../cicd/thresholds.json)
+> via `cert_common.agent_gate_thresholds("10k-analyst")`, so loosening one is a
+> reviewable diff. The same applies to the gate profiles for the other two agents
+> in §5 and §6.
+
 ```python
 GATE_10K_ANALYST = usecase_certification_gate({
     "numerical_accuracy":     0.85,   # core correctness

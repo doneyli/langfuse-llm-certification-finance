@@ -64,6 +64,53 @@ class TestModelOverrideAndUnknown:
         assert recert.resolve_recert_plan("") == []
 
 
+class TestJobSummary:
+    """The skip case exits 0 and renders as a green check, so the summary is the
+    only thing that distinguishes 'nothing was gated' from 'the gate passed'."""
+
+    def test_skip_states_it_makes_no_claim(self):
+        report = recert.render_summary("some-unrelated-prompt", None, [])
+        assert "Skipped" in report
+        assert "no claim" in report
+        assert "PASSED" not in report
+
+    def test_pass_verdict_lists_each_target(self):
+        jobs = recert.resolve_recert_plan("usecase-advisory-draft")
+        report = recert.render_summary("usecase-advisory-draft", None, jobs, [0])
+        assert "✅ PASSED" in report
+        assert jobs[0].label in report
+
+    def test_fail_verdict_names_the_rollback(self):
+        jobs = recert.resolve_recert_plan("usecase-advisory-draft")
+        report = recert.render_summary("usecase-advisory-draft", None, jobs, [1])
+        assert "❌ FAILED (exit 1)" in report
+        assert "must not stay on" in report
+
+    def test_same_label_jobs_do_not_collapse(self):
+        # Verdicts are positional, so a duplicated label cannot hide a failure.
+        jobs = [recert.RecertJob(label="dup", argv=[]),
+                recert.RecertJob(label="dup", argv=[])]
+        report = recert.render_summary("p", None, jobs, [0, 1])
+        assert "✅ PASSED" in report and "❌ FAILED (exit 1)" in report
+        assert "must not stay on" in report
+
+    def test_write_summary_is_a_noop_outside_actions(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+        recert.write_summary("ignored")  # must not raise
+
+    def test_write_summary_appends_in_actions(self, monkeypatch, tmp_path):
+        path = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(path))
+        recert.write_summary("first\n")
+        recert.write_summary("second\n")
+        assert path.read_text() == "first\nsecond\n"
+
+    def test_unwritable_summary_does_not_fail_the_gate(self, monkeypatch, tmp_path):
+        # A broken summary path is a reporting problem, never a gate verdict.
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "no" / "such" / "f"))
+        recert.write_summary("ignored")
+
+
 class TestNoDriftFromRegisteredPrompts:
     def test_every_registered_certification_prompt_is_routed(self):
         """Guard: if a new managed cert prompt is added to setup_prompts.py, it
