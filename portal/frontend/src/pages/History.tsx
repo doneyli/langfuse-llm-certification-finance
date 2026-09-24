@@ -23,10 +23,12 @@ import PageHeader from "../components/PageHeader";
 import ProvenanceStrip from "../components/ProvenanceStrip";
 import ScoreBar from "../components/ScoreBar";
 import StatusBadge from "../components/StatusBadge";
+import ThresholdCell from "../components/ThresholdCell";
 import { api } from "../lib/api";
 import { useChartTheme } from "../lib/chartTheme";
 import { datasetLabel } from "../lib/datasets";
 import { datetime, metricLabel, shortDate } from "../lib/format";
+import { barPct } from "../lib/gate";
 import type { HistoryRun } from "../types";
 
 const headers: TableColumnConfigProps[] = [
@@ -40,6 +42,7 @@ const headers: TableColumnConfigProps[] = [
 ];
 
 function tableRow(dataset: string, run: HistoryRun): TableRowType {
+  const detailsHref = `/breakdown/${dataset}/${encodeURIComponent(run.run_name)}`;
   return {
     id: run.run_name,
     items: [
@@ -76,9 +79,11 @@ function tableRow(dataset: string, run: HistoryRun): TableRowType {
       },
       {
         label: (
-          <span className="mono" style={{ fontSize: 13 }}>
-            {Math.round(run.threshold * 100)}%
-          </span>
+          <ThresholdCell
+            threshold={run.threshold}
+            gate={run.gate_thresholds}
+            detailsHref={detailsHref}
+          />
         ),
       },
       {
@@ -94,7 +99,7 @@ function tableRow(dataset: string, run: HistoryRun): TableRowType {
             component={RouterLink}
             size="sm"
             weight="medium"
-            to={`/breakdown/${dataset}/${encodeURIComponent(run.run_name)}`}
+            to={detailsHref}
           >
             Details
           </Link>
@@ -136,10 +141,24 @@ export default function History() {
                   : null,
               model: r.model,
               metric: metricLabel(r.primary_score.name),
+              bar: r.threshold ?? null,
             }));
 
-          const threshold =
-            runs.length > 0 ? Math.round(runs[0].threshold * 100) : 85;
+          // A dataset's history mixes models and agents, each plotted on its
+          // own primary score and judged against its own bar. One reference
+          // line is only honest when every plotted run shares the same metric
+          // and the same bar; otherwise each point's bar is in its tooltip.
+          const first = chartData[0];
+          const sharedBar =
+            first &&
+            first.bar !== null &&
+            chartData.every((d) => d.metric === first.metric && d.bar === first.bar)
+              ? first.bar
+              : null;
+          const barLabel =
+            sharedBar !== null
+              ? `${first.metric || "score"} ≥ ${barPct(sharedBar)}`
+              : "";
 
           return (
             <>
@@ -182,17 +201,19 @@ export default function History() {
                           domain={[0, 100]}
                           tickFormatter={(v) => `${v}%`}
                         />
-                        <ReferenceLine
-                          y={threshold}
-                          stroke={chart.threshold}
-                          strokeDasharray="4 4"
-                          label={{
-                            value: `Threshold ${threshold}%`,
-                            fill: chart.threshold,
-                            fontSize: 11,
-                            position: "insideTopRight",
-                          }}
-                        />
+                        {sharedBar !== null && (
+                          <ReferenceLine
+                            y={sharedBar * 100}
+                            stroke={chart.threshold}
+                            strokeDasharray="4 4"
+                            label={{
+                              value: barLabel,
+                              fill: chart.threshold,
+                              fontSize: 11,
+                              position: "insideTopRight",
+                            }}
+                          />
+                        )}
                         <Tooltip
                           contentStyle={{
                             background: chart.tooltipBg,
@@ -203,11 +224,18 @@ export default function History() {
                           }}
                           labelStyle={{ color: chart.tooltipText }}
                           itemStyle={{ color: chart.tooltipText }}
-                          formatter={(v: number, _name, item) => [
-                            `${v.toFixed(1)}%`,
-                            (item?.payload as { metric?: string })?.metric ||
-                              "Score",
-                          ]}
+                          formatter={(v: number, _name, item) => {
+                            const p = item?.payload as
+                              | { metric?: string; bar?: number | null; model?: string }
+                              | undefined;
+                            const bar = p?.bar ?? null;
+                            return [
+                              bar === null
+                                ? `${v.toFixed(1)}% (no bar recorded)`
+                                : `${v.toFixed(1)}% (bar ≥ ${barPct(bar)})`,
+                              `${p?.model ?? "run"} · ${p?.metric || "score"}`,
+                            ];
+                          }}
                         />
                         <Line
                           type="monotone"
