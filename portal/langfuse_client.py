@@ -14,6 +14,8 @@ import urllib.request
 from cachetools import TTLCache
 from langfuse import Langfuse
 
+from cert_common import recorded_gate
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,103 @@ PRIMARY_SCORE_CHAIN = [
     "avg_exact_match",
     "avg_completeness",
 ]
+
+
+def resolve_run_thresholds(meta, primary_score_name=None, score_names=()):
+    """Resolve the bar(s) a dataset run was actually judged against, for display.
+
+    The recorded gate comes from ``cert_common.recorded_gate`` — the one rule the
+    portal and the evidence pack (export_results.py) share — which reads the
+    run's own metadata so a historical run shows the bar in force when it ran.
+
+    Returns ``(threshold, gate_thresholds)``:
+      threshold        the bar ``primary_score_name`` (e.g. ``avg_groundedness``)
+                       was judged against, or None if the gate did not judge it.
+                       With no primary score, a model gate's single bar; an
+                       agent gate has no single bar, so None.
+      gate_thresholds  the per-dimension dict for agent runs, else None.
+    ``score_names`` are the run's (un-prefixed) score names, used to name the
+    judged score of a model run recorded before its runner wrote ``gate``.
+    """
+    gate = recorded_gate(meta, score_names)
+    if not gate:
+        return None, None
+    is_agent = (meta or {}).get("gate_thresholds") is not None
+    if primary_score_name is not None:
+        threshold = gate.get(primary_score_name.removeprefix("avg_"))
+    else:
+        threshold = None if is_agent else next(iter(gate.values()))
+    return threshold, (gate if is_agent else None)
+
+
+def replay_gate(gate, means):
+    """Re-derive a gate's verdict from a run's per-score means.
+
+    Fallback for runs that predate the persisted ``certification_result``
+    score; live runs always read that score instead. ``means`` must be the
+    *unrounded* means — the gate compared those, and a rounded 0.9996 would
+    clear a 1.00 bar the gate failed. Mirrors
+    ``evaluators.usecase_certification_gate``: every bar must clear, and a score
+    with no values cannot certify.
+    """
+    cleared = all(
+        dim in means and means[dim] >= bar for dim, bar in gate.items()
+    )
+    return "PASSED" if cleared else "FAILED"
+
+
+def _run_score_names(cert):
+    """Un-prefixed names of a run's run-level ``avg_*`` scores."""
+    return {name.removeprefix("avg_") for name in cert if name.startswith("avg_")}
+
+
+def summarize_run(score_totals, meta, cert_value=None):
+    """Aggregate a run's per-item scores and judge them against its recorded gate.
+
+    ``score_totals`` maps score name -> item values. Returns ``aggregates``
+    (per score: display stats plus the ``bar`` it was judged against and
+    whether it ``cleared`` it), ``threshold`` and ``gate_thresholds`` (see
+    resolve_run_thresholds), and the run ``status``.
+
+    An evaluator the gate did not judge gets no bar: a model gate's threshold
+    belongs to its one judged score, never to the rest. Verdicts compare the
+    unrounded means the gate compared; the rounded mean is display-only.
+    """
+    means = {name: sum(values) / len(values)
+             for name, values in score_totals.items() if values}
+    threshold, gate = resolve_run_thresholds(meta, None, means)
+    bars = recorded_gate(meta, means) or {}
+
+    aggregates = {}
+    for name, values in score_totals.items():
+        if not values:
+            continue
+        bar = bars.get(name)
+        aggregates[name] = {
+            "mean": round(means[name], 3),
+            "min": round(min(values), 3),
+            "max": round(max(values), 3),
+            "count": len(values),
+            "pass_rate": round(sum(1 for v in values if v >= 0.5) / len(values), 3),
+            "bar": bar,
+            "cleared": None if bar is None else means[name] >= bar,
+        }
+
+    if cert_value is not None:
+        # Same source of truth as the dashboard/history status, so a run never
+        # shows PASSED on one page and UNKNOWN on another.
+        status = "PASSED" if cert_value == 1.0 else "FAILED"
+    elif bars:
+        # Older runs without a persisted gate score: re-apply the bars the run
+        # recorded, to exactly the scores they judged.
+        status = replay_gate(bars, means)
+    else:
+        # No persisted gate score and no recorded bar — nothing to judge
+        # against, so don't invent one.
+        status = "UNKNOWN"
+
+    return {"aggregates": aggregates, "threshold": threshold,
+            "gate_thresholds": gate, "status": status}
 
 
 class PortalClient:
@@ -288,13 +387,18 @@ class PortalClient:
                 else:
                     status = "UNKNOWN"
 
+                primary = self._pick_primary_score(cert)
+                threshold, gate = resolve_run_thresholds(
+                    meta, primary["name"], _run_score_names(cert))
+
                 rows.append({
                     "model": model,
                     "dataset": ds_name,
                     "dataset_short": ds_name.split("/")[-1],
                     "status": status,
-                    "primary_score": self._pick_primary_score(cert),
-                    "threshold": meta.get("threshold", 0.85),
+                    "primary_score": primary,
+                    "threshold": threshold,
+                    "gate_thresholds": gate,
                     "run_name": run_name,
                     "timestamp": info["ts"][:10] if info["ts"] else "",
                     "cert_comment": cert.get("cert_comment", ""),
@@ -328,12 +432,17 @@ class PortalClient:
             if cert_value is not None:
                 status = "PASSED" if cert_value == 1.0 else "FAILED"
 
+            primary = self._pick_primary_score(cert)
+            threshold, gate = resolve_run_thresholds(
+                meta, primary["name"], _run_score_names(cert))
+
             runs.append({
                 "run_name": run_name,
                 "model": meta.get("model", self._parse_model_from_run_name(run_name)),
                 "status": status,
-                "primary_score": self._pick_primary_score(cert),
-                "threshold": meta.get("threshold", 0.85),
+                "primary_score": primary,
+                "threshold": threshold,
+                "gate_thresholds": gate,
                 "timestamp": r.get("createdAt", "")[:19],
                 "cert_comment": cert.get("cert_comment", ""),
             })
@@ -365,7 +474,8 @@ class PortalClient:
             return {"error": f"Run '{run_name}' not found",
                     "dataset": dataset_name,
                     "dataset_short": dataset_name.split("/")[-1],
-                    "run_name": run_name, "threshold": 0.85,
+                    "run_name": run_name,
+                    "threshold": None, "gate_thresholds": None,
                     "total_items": 0, "items": [],
                     "aggregates": {}, "model": "", "status": "UNKNOWN",
                     "score_names": [], "langfuse_url": self.host}
@@ -433,38 +543,8 @@ class PortalClient:
                 "scores": item_scores,
             })
 
-        aggregates = {}
-        for name, values in score_totals.items():
-            if values:
-                aggregates[name] = {
-                    "mean": round(sum(values) / len(values), 3),
-                    "min": round(min(values), 3),
-                    "max": round(max(values), 3),
-                    "count": len(values),
-                    "pass_rate": round(
-                        sum(1 for v in values if v >= 0.5) / len(values), 3
-                    ),
-                }
-
-        cert_value = run_scores.get("certification_result")
-        if cert_value is not None:
-            # Same source of truth as the dashboard/history status, so a run
-            # never shows PASSED on one page and UNKNOWN on another.
-            status = "PASSED" if cert_value == 1.0 else "FAILED"
-        else:
-            # Older runs without a persisted gate score: judge the first
-            # item-level score from the primary chain against the threshold.
-            item_chain = [n.removeprefix("avg_") for n in PRIMARY_SCORE_CHAIN]
-            primary_name = next(
-                (n for n in item_chain if n in aggregates),
-                min(set(aggregates) - set(item_chain), default=None),
-            )
-            primary_agg = aggregates.get(primary_name) if primary_name else None
-            if primary_agg:
-                threshold = meta.get("threshold", 0.85)
-                status = "PASSED" if primary_agg["mean"] >= threshold else "FAILED"
-            else:
-                status = "UNKNOWN"
+        summary = summarize_run(
+            score_totals, meta, run_scores.get("certification_result"))
 
         all_score_names = sorted(set(
             name for item in items_data for name in item["scores"]
@@ -475,10 +555,8 @@ class PortalClient:
             "dataset_short": dataset_name.split("/")[-1],
             "run_name": run_name,
             "model": meta.get("model", self._parse_model_from_run_name(run_name)),
-            "threshold": meta.get("threshold", 0.85),
-            "status": status,
+            **summary,
             "total_items": len(items_data),
-            "aggregates": aggregates,
             "items": items_data,
             "score_names": all_score_names,
             "langfuse_url": self.host,

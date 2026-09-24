@@ -451,6 +451,8 @@ Langfuse is the source of truth for the evidence:
 
 Exports experiment scores as a reviewable evidence pack for compliance/AMRM report generation.
 
+The pack's **Gate** row names the bars the run was actually judged by, read from the run's own metadata — `numerical_accuracy ≥ 85%` for a model run, every dimension (`all must clear: …`) for an agent run, and `—` for a run that recorded no bar. It shares that rule with the portal (`cert_common.recorded_gate`), so the two can never report different bars for the same run.
+
 ```
 Options:
   --dataset DATASET          Langfuse dataset name (required)
@@ -539,6 +541,8 @@ The UI is a React SPA built with [Click UI](https://clickhouse.design/click-ui),
 
 The dashboard is a **latest-run-per-(dataset, model) matrix**: for each dataset it shows the newest run of every `metadata.model` value — plain models, `--label` variants (e.g. `claude-opus-4-7-finance-expert`), and agents (`usecase:10k-analyst`) each get their own row. Each row's *primary score* is picked per run — `avg_numerical_accuracy` if present, else `avg_sentiment_accuracy`, `avg_groundedness`, `avg_exact_match`, `avg_completeness`, or the first other `avg_*` score — and labeled with the metric name.
 
+The **Threshold** column shows the bar that run was judged against, read from the run's own metadata so a historical run displays the bar that was in force when it ran, not whatever the gate config says today. A model run records one bar for one score (`metadata.threshold` plus `metadata.gate`, the score it judged) — that bar belongs to that score only, never to the run's other evaluators. An agent run records one bar per dimension (`metadata.gate_thresholds`) and *all* of them must clear, so the column shows the bar for the score in that row plus a link, `of 4 gate dims`, to **Details**, which lists every evaluator against its own bar (`—` for one the gate never judged). A run that recorded no bar shows `—` rather than a number nothing was judged against. The **History** trend draws a single reference line only when every plotted run shares the same metric and bar; otherwise each point's own bar is in its tooltip.
+
 ### Running the portal
 
 ```bash
@@ -564,7 +568,7 @@ cd portal/frontend && npm run dev        # http://localhost:5173
 | Page | URL | Description |
 |------|-----|-------------|
 | Dashboard | `/` | Gate matrix — which models pass/fail against which datasets |
-| Breakdown | `/breakdown/{dataset}/{run}` | Evaluator scores (bar chart + table) for a specific run |
+| Breakdown | `/breakdown/{dataset}/{run}` | Evaluator scores (bar chart + table) for a specific run — each evaluator against the bar it was judged by, `—` if the gate never judged it |
 | History | `/history/{dataset}` | Timeline of all runs with trend chart |
 | Run Detail | `/run/{dataset}/{run}` | Per-item scores with links to Langfuse traces |
 
@@ -812,6 +816,7 @@ uv run pytest --ignore=tests/test_certification.py -v
 | `test_promote_trace_to_dataset.py` | Loop Edge A: deterministic `prod-<traceId>` ids, never-copy-suspect-output guard |
 | `test_recert_for_prompt.py` | Loop Edge B: prompt→target routing, `--ci` wiring, drift guard vs `setup_prompts.py`, skip-vs-pass job summary |
 | `test_gate_thresholds.py` | The quality bar: registry↔`cicd/thresholds.json` drift, every gated dimension has an evaluator, a missing bar raises instead of certifying everything |
+| `test_portal_thresholds.py` | Reading a run's recorded gate (portal + evidence pack): a model bar lands only on its judged score, no invented or fallback bars, verdicts use unrounded means, legacy inference stays in step with `select_evaluators` |
 
 **Live gate** — `tests/test_certification.py` runs real experiments and asserts pass/fail. Requires Langfuse credentials, `ANTHROPIC_API_KEY`, and seeded datasets; it runs in the `certification.yml` workflow, not on PRs:
 

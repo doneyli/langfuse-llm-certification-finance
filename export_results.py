@@ -37,7 +37,7 @@ except ImportError:
           file=sys.stderr)
     sys.exit(1)
 
-from cert_common import langfuse_creds
+from cert_common import describe_gate, langfuse_creds, recorded_gate
 
 
 # --------------- CLI ---------------
@@ -198,7 +198,10 @@ def collect_run_data(client, dataset_name, run_name=None):
 def format_markdown(data: dict) -> str:
     """Format results as a certification report in Markdown."""
     model = data["run_metadata"].get("model", "unknown")
-    threshold = data["run_metadata"].get("threshold", 0.85)
+    # The bars this run was actually judged by, from its own metadata — an agent
+    # run records one per dimension, and a run that recorded none says so
+    # rather than being reported against a bar nothing enforced.
+    gate = recorded_gate(data["run_metadata"], data["aggregates"])
 
     # Determine pass/fail from certification_result if available
     cert = data["aggregates"].get("certification_result", {})
@@ -217,7 +220,7 @@ def format_markdown(data: dict) -> str:
         f"| **Run** | {data['run_name']} |",
         f"| **Date** | {data['exported_at'][:10]} |",
         f"| **Items Evaluated** | {data['total_items']} |",
-        f"| **Threshold** | {threshold:.0%} |",
+        f"| **Gate** | {describe_gate(gate)} |",
         f"| **Result** | **{status}** |",
         f"",
         f"## Scores Summary",

@@ -10,6 +10,8 @@ single home for the Langfuse lifecycle plumbing:
   agent_gate_thresholds   - the gate bars for one use case, read from
                             cicd/thresholds.json (the quality bar as code)
   model_gate_threshold    - the model-cert pass bar, same file
+  recorded_gate           - the bars a past run was actually judged by, read
+                            from its own metadata (portal + evidence pack)
   langfuse_creds          - host + basic-auth header from env
   get_managed_prompt      - fetch a Langfuse-managed prompt (production label),
                             falling back to a hardcoded template (prompt mgmt)
@@ -90,6 +92,74 @@ def model_gate_threshold(*, path=None) -> float:
             f"No model_gate.default_threshold in {path or THRESHOLDS_PATH}."
         )
     return float(threshold)
+
+
+# --------------- Reading the gate a run recorded ---------------
+
+# The only scores the model gate ever judges against its scalar threshold — see
+# run_certification.select_evaluators(). Used to name the judged score for runs
+# recorded before that runner started writing `metadata.gate`.
+MODEL_GATE_SCORES = ("numerical_accuracy", "sentiment_accuracy")
+
+
+def _as_bar(value):
+    """A JSON number as a float bar; None for anything else (incl. bools)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def recorded_gate(meta, score_names=()) -> dict | None:
+    """Return the gate a dataset run was judged by, as {score_name: bar}, or None.
+
+    Read from the run's own metadata — never from cicd/thresholds.json — so a
+    historical run reports the bar that was in force when it ran, not today's.
+    Three producers record a gate, in two shapes:
+
+    * run_usecase_certification.py (agent gate) writes ``gate_thresholds``: one
+      bar per dimension, every one of which must clear.
+    * tests/test_certification.py (live gate) writes ``threshold`` plus
+      ``gate``, the one score that threshold judged.
+    * run_certification.py (model gate) writes ``threshold`` and ``gate``. Runs
+      recorded before it wrote ``gate`` are resolved from ``score_names``: the
+      judged score is whichever of MODEL_GATE_SCORES the run carries, which is
+      exactly the one select_evaluators() picks.
+
+    A threshold is a bar only for the score it judged, so it is never applied
+    to any other score — an evaluator the gate did not judge has no bar. And an
+    agent run whose recorded gate holds no usable bars returns None rather than
+    falling back to a scalar: an empty agent gate certifies everything (see
+    agent_gate_thresholds), so no bar was actually enforced.
+    """
+    meta = meta or {}
+    if meta.get("gate_thresholds") is not None:
+        raw = meta["gate_thresholds"]
+        bars = ({name: _as_bar(v) for name, v in raw.items()}
+                if isinstance(raw, dict) else {})
+        bars = {name: bar for name, bar in bars.items() if bar is not None}
+        return bars or None
+
+    threshold = _as_bar(meta.get("threshold"))
+    if threshold is None:
+        return None
+    judged = meta.get("gate")
+    if not isinstance(judged, str) or not judged:
+        present = set(score_names)
+        judged = next((s for s in MODEL_GATE_SCORES if s in present), None)
+    return {judged: threshold} if judged else None
+
+
+def describe_gate(gate: dict | None) -> str:
+    """One line naming every bar, e.g. 'groundedness ≥ 80% · completeness ≥ 70%'.
+
+    A multi-dimension gate is prefixed 'all must clear' because that is the rule
+    the agent gate applies; a gate that recorded no bar says so rather than
+    printing a number nothing was judged against.
+    """
+    if not gate:
+        return "— (no bar recorded for this run)"
+    bars = " · ".join(f"{name} ≥ {bar:.0%}" for name, bar in sorted(gate.items()))
+    return f"all must clear: {bars}" if len(gate) > 1 else bars
 
 
 # --------------- Credentials ---------------

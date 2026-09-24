@@ -112,7 +112,7 @@ file that owns it, and its status in this workstream.
 | 4 | **Item scoring** | Scores + Score Configs | `evaluators.py` + `setup_score_configs.py` | ✅ wired (incl. new `tool_use_correctness`) |
 | 5 | **Run-level gate** | Score `certification_result` | `evaluators.usecase_certification_gate` + `cert_common.persist_run_evaluations` | ✅ wired (multi-dimensional, all-must-pass) |
 | 6 | **Human review** | Annotation Queues | `setup_annotation_queues.py` + `cert_common.queue_failed_items` | ✅ wired (reused) |
-| 7 | **Reporting / status** | Portal + export | Portal (`metadata.model="usecase:<name>"`) + `export_results.py` | ✅ free dashboard row, no portal change |
+| 7 | **Reporting / status** | Portal + export | Portal (`metadata.model="usecase:<name>"`) + `export_results.py` | ✅ free dashboard row; the portal reads `metadata.gate_thresholds` so agent rows show the per-dimension bars the gate enforced, not a single number |
 | 8 | **Production monitoring** | Online evaluation / live traces | `monitor_production.py` + UI LLM-as-judge | ✅ reused; applies to deployed agents |
 
 Legend: ✅ wired and verified · 🟡 partially wired, has a live-unverified assumption ·

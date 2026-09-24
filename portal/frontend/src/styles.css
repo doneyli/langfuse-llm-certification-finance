@@ -588,6 +588,11 @@ code,
   background: linear-gradient(90deg, var(--fail-bar-a) 0%, var(--fail-bar-b) 100%);
 }
 
+/* No bar recorded for this score — show the value without a verdict colour. */
+.score-bar-fill.neutral {
+  background: var(--stroke-strong);
+}
+
 .score-bar-value {
   font-family: "JetBrains Mono", monospace;
   font-size: 12px;

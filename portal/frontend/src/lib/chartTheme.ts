@@ -5,6 +5,8 @@ export interface ChartTheme {
   axis: string;
   axisText: string;
   line: string;
+  /** Bars with no gate bar recorded — no verdict to colour for. */
+  neutral: string;
   threshold: string;
   pass: string;
   fail: string;
@@ -18,6 +20,7 @@ const LIGHT: ChartTheme = {
   axis: "rgba(15, 20, 25, 0.12)",
   axisText: "#687182",
   line: "#1e88e5",
+  neutral: "#9099aa",
   threshold: "#0a8a5f",
   pass: "#0a8a5f",
   fail: "#c42b2b",
@@ -31,6 +34,7 @@ const DARK: ChartTheme = {
   axis: "rgba(229, 231, 235, 0.14)",
   axisText: "#8892a4",
   line: "#60a5fa",
+  neutral: "#6b7280",
   threshold: "#34d399",
   pass: "#34d399",
   fail: "#f87171",
