@@ -47,11 +47,18 @@ export interface HistoryRun {
 }
 
 export interface ScoreAggregate {
+  /** Rounded for display — never compare it to `bar`; read `cleared`. */
   mean: number;
   min: number;
   max: number;
   count: number;
   pass_rate: number;
+  /** The bar this evaluator was judged against; null if the gate did not
+   *  judge it (a model gate judges one score, never the rest). */
+  bar: number | null;
+  /** Whether the unrounded mean cleared `bar`, decided server-side; null when
+   *  there is no bar. */
+  cleared: boolean | null;
 }
 
 export interface RunItem {

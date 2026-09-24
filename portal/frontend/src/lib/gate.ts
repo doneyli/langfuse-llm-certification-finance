@@ -21,17 +21,3 @@ export function gateSummary(gate: GateThresholds): string {
     .join(" · ");
   return `Every dimension must clear its own bar: ${dims}`;
 }
-
-/**
- * The bar that applies to one evaluator: its gate dimension if the run
- * recorded a multi-dimensional gate, else the run's scalar threshold, else
- * null (nothing was recorded — don't invent a bar to judge against).
- */
-export function barFor(
-  name: string,
-  gate: GateThresholds | null,
-  scalar: number | null
-): number | null {
-  if (gate) return gate[name] ?? null;
-  return scalar;
-}

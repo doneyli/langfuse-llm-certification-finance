@@ -1,11 +1,16 @@
+import { Link as RouterLink } from "react-router-dom";
+import { Link } from "@clickhouse/click-ui";
+
 import { barPct, gateEntries, gateSummary } from "../lib/gate";
 import type { GateThresholds } from "../types";
 
 interface Props {
   /** Bar for the score shown next to this cell. */
-  threshold: number | null;
+  threshold: number | null | undefined;
   /** Per-dimension bars when the run was judged by an agent gate. */
-  gate: GateThresholds | null;
+  gate: GateThresholds | null | undefined;
+  /** The run's Details page, which lists every dimension against its bar. */
+  detailsHref: string;
 }
 
 /**
@@ -14,32 +19,39 @@ interface Props {
  * A model gate has one bar, so we print it. An agent gate has one bar per
  * dimension and *all* of them must clear, so printing a single number would
  * misstate what the gate enforced: we print the bar for the score shown in the
- * row, mark how many dimensions stand behind the verdict, and spell the whole
- * gate out on hover (the Details page lists every bar).
+ * row and link the dimension count to Details, where every bar is listed. A
+ * link rather than a tooltip, so the whole gate is reachable by touch,
+ * keyboard, and screen reader — not only by hovering a mouse.
  */
-export default function ThresholdCell({ threshold, gate }: Props) {
-  if (gate) {
+export default function ThresholdCell({ threshold, gate, detailsHref }: Props) {
+  // `== null` on purpose: a stale or partial payload can omit these keys, and
+  // undefined must read as "no bar", not as a bar.
+  if (gate != null) {
+    const dims = gateEntries(gate).length;
     return (
-      <span
-        style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}
-        title={gateSummary(gate)}
-      >
+      <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
         <span className="mono" style={{ fontSize: 13 }}>
-          {threshold !== null ? barPct(threshold) : "—"}
+          {threshold != null ? barPct(threshold) : "—"}
         </span>
-        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-          of {gateEntries(gate).length} gate dims
-        </span>
+        <Link
+          component={RouterLink}
+          to={detailsHref}
+          size="sm"
+          title={gateSummary(gate)}
+          aria-label={`of ${dims} gate dims — ${gateSummary(gate)}. View all bars.`}
+        >
+          of {dims} gate dims
+        </Link>
       </span>
     );
   }
 
-  if (threshold === null) {
+  if (threshold == null) {
     return (
       <span
         className="mono"
         style={{ fontSize: 13, color: "var(--text-subtle)" }}
-        title="This run recorded no threshold"
+        title="This run recorded no threshold for this score"
       >
         —
       </span>

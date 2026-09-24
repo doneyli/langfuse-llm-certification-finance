@@ -42,6 +42,7 @@ const headers: TableColumnConfigProps[] = [
 ];
 
 function tableRow(dataset: string, run: HistoryRun): TableRowType {
+  const detailsHref = `/breakdown/${dataset}/${encodeURIComponent(run.run_name)}`;
   return {
     id: run.run_name,
     items: [
@@ -81,6 +82,7 @@ function tableRow(dataset: string, run: HistoryRun): TableRowType {
           <ThresholdCell
             threshold={run.threshold}
             gate={run.gate_thresholds}
+            detailsHref={detailsHref}
           />
         ),
       },
@@ -97,7 +99,7 @@ function tableRow(dataset: string, run: HistoryRun): TableRowType {
             component={RouterLink}
             size="sm"
             weight="medium"
-            to={`/breakdown/${dataset}/${encodeURIComponent(run.run_name)}`}
+            to={detailsHref}
           >
             Details
           </Link>
@@ -139,17 +141,23 @@ export default function History() {
                   : null,
               model: r.model,
               metric: metricLabel(r.primary_score.name),
+              bar: r.threshold ?? null,
             }));
 
-          // The trend plots each run's primary score, so the only honest
-          // reference line is the bar that score was judged against — taken
-          // from the latest run, and named, because an agent gate has three or
-          // four more bars behind its verdict (all of them on Details).
-          const latest = runs[0];
-          const bar = latest?.threshold ?? null;
+          // A dataset's history mixes models and agents, each plotted on its
+          // own primary score and judged against its own bar. One reference
+          // line is only honest when every plotted run shares the same metric
+          // and the same bar; otherwise each point's bar is in its tooltip.
+          const first = chartData[0];
+          const sharedBar =
+            first &&
+            first.bar !== null &&
+            chartData.every((d) => d.metric === first.metric && d.bar === first.bar)
+              ? first.bar
+              : null;
           const barLabel =
-            bar !== null
-              ? `${metricLabel(latest.primary_score.name) || "score"} ≥ ${barPct(bar)}`
+            sharedBar !== null
+              ? `${first.metric || "score"} ≥ ${barPct(sharedBar)}`
               : "";
 
           return (
@@ -193,9 +201,9 @@ export default function History() {
                           domain={[0, 100]}
                           tickFormatter={(v) => `${v}%`}
                         />
-                        {bar !== null && (
+                        {sharedBar !== null && (
                           <ReferenceLine
-                            y={bar * 100}
+                            y={sharedBar * 100}
                             stroke={chart.threshold}
                             strokeDasharray="4 4"
                             label={{
@@ -216,11 +224,18 @@ export default function History() {
                           }}
                           labelStyle={{ color: chart.tooltipText }}
                           itemStyle={{ color: chart.tooltipText }}
-                          formatter={(v: number, _name, item) => [
-                            `${v.toFixed(1)}%`,
-                            (item?.payload as { metric?: string })?.metric ||
-                              "Score",
-                          ]}
+                          formatter={(v: number, _name, item) => {
+                            const p = item?.payload as
+                              | { metric?: string; bar?: number | null; model?: string }
+                              | undefined;
+                            const bar = p?.bar ?? null;
+                            return [
+                              bar === null
+                                ? `${v.toFixed(1)}% (no bar recorded)`
+                                : `${v.toFixed(1)}% (bar ≥ ${barPct(bar)})`,
+                              `${p?.model ?? "run"} · ${p?.metric || "score"}`,
+                            ];
+                          }}
                         />
                         <Line
                           type="monotone"

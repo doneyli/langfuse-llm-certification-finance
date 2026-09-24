@@ -35,6 +35,7 @@ const headers: TableColumnConfigProps[] = [
 ];
 
 function tableRow(row: DashboardRow): TableRowType {
+  const detailsHref = `/breakdown/${row.dataset}/${encodeURIComponent(row.run_name)}`;
   return {
     id: `${row.dataset}::${row.run_name}`,
     items: [
@@ -64,6 +65,7 @@ function tableRow(row: DashboardRow): TableRowType {
           <ThresholdCell
             threshold={row.threshold}
             gate={row.gate_thresholds}
+            detailsHref={detailsHref}
           />
         ),
       },
@@ -81,7 +83,7 @@ function tableRow(row: DashboardRow): TableRowType {
               component={RouterLink}
               size="sm"
               weight="medium"
-              to={`/breakdown/${row.dataset}/${encodeURIComponent(row.run_name)}`}
+              to={detailsHref}
             >
               Details
             </Link>

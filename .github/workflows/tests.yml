@@ -2,7 +2,8 @@ name: Tests
 
 # Fast, offline unit tests that gate every PR (and pushes to main). These need no
 # Langfuse/Anthropic credentials or network — the agent tests monkeypatch the LLM
-# and span helpers, and the evaluator/foundation tests are pure functions.
+# and span helpers, and the evaluator/foundation tests are pure functions. A
+# second job typechecks and builds the portal frontend, also offline.
 #
 # The live certification workflow (certification.yml) is separate: it runs the
 # real FinanceBench/FPB cert against Langfuse on push to main and on demand, and
@@ -33,3 +34,34 @@ jobs:
         # Exclude the live integration test (needs Langfuse + ANTHROPIC_API_KEY +
         # seeded datasets); it runs in certification.yml's pytest-gate instead.
         run: uv run pytest --ignore=tests/test_certification.py -v --tb=short
+
+  portal-frontend:
+    # The Certification Portal SPA is what stakeholders read the gate from.
+    # Typecheck and build it on every PR so a TS error or broken build can't
+    # merge green and surface only when someone runs `make portal`. Offline:
+    # no secrets, no Langfuse.
+    name: Portal frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: portal/frontend
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"  # the floor AGENTS.md documents for `make portal`
+          cache: npm
+          cache-dependency-path: portal/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and build
+        # `build` is `tsc -b && vite build`, so this fails on a type error too.
+        run: npm run build

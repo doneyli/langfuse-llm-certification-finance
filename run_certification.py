@@ -428,6 +428,9 @@ def main():
             "endpoint": args.endpoint,
             "dataset": args.dataset,
             "threshold": args.threshold,
+            # The one score `threshold` judged (None: this mode ran no gate).
+            # Same key the live gate writes, so a reader never has to guess.
+            "gate": primary_score,
             "evaluator_mode": args.evaluators,
         },
     )

@@ -13,7 +13,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -28,10 +27,16 @@ import StatusBadge from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { useChartTheme } from "../lib/chartTheme";
 import { datasetLabel } from "../lib/datasets";
-import { barFor, barPct } from "../lib/gate";
+import { barPct } from "../lib/gate";
 import type { ScoreAggregate } from "../types";
 
-const TAIL_HEADERS: TableColumnConfigProps[] = [
+// Every evaluator row carries the bar it was judged against, decided
+// server-side: an agent gate's bar for that dimension, a model gate's one bar
+// on its one judged score only, and "—" for any evaluator the gate never
+// judged. So the column is truthful for both gate kinds.
+const HEADERS: TableColumnConfigProps[] = [
+  { label: "Evaluator" },
+  { label: "Gate", width: "90px" },
   { label: "Mean", width: "200px" },
   { label: "Min", width: "90px" },
   { label: "Max", width: "90px" },
@@ -39,50 +44,38 @@ const TAIL_HEADERS: TableColumnConfigProps[] = [
   { label: "Items", width: "90px" },
 ];
 
-// The per-dimension "Gate" column belongs to agent runs: their gate names a bar
-// for each dimension. A model gate enforces one score against one bar, so
-// repeating that bar on every evaluator would claim gates that don't exist.
-const GATE_HEADERS: TableColumnConfigProps[] = [
-  { label: "Evaluator" },
-  { label: "Gate", width: "90px" },
-  ...TAIL_HEADERS,
-];
-
-const SCALAR_HEADERS: TableColumnConfigProps[] = [
-  { label: "Evaluator" },
-  ...TAIL_HEADERS,
-];
-
-interface AggRow {
-  name: string;
-  agg: ScoreAggregate;
-  /** The bar this evaluator's mean is judged against, or null if none. */
-  bar: number | null;
-  /** Whether that bar is this dimension's own (agent gate) or the run's single
-   *  threshold, which is not attributable to any one evaluator. */
-  perDimension: boolean;
+/** Read a bar/verdict defensively: a stale payload may omit the keys. */
+function barOf(agg: ScoreAggregate): number | null {
+  return agg.bar ?? null;
+}
+function clearedOf(agg: ScoreAggregate): boolean | null {
+  return agg.cleared ?? null;
 }
 
-function aggRow({ name, agg, bar, perDimension }: AggRow): TableRowType {
-  const gateCell = {
-    label: (
-      <span
-        className="mono"
-        style={{
-          fontSize: 13,
-          color: bar === null ? "var(--text-subtle)" : "var(--text-muted)",
-        }}
-      >
-        {bar === null ? "—" : `≥ ${barPct(bar)}`}
-      </span>
-    ),
-  };
+function aggRow([name, agg]: [string, ScoreAggregate]): TableRowType {
+  const bar = barOf(agg);
   return {
     id: name,
     items: [
       { label: <span style={{ fontWeight: 600 }}>{name}</span> },
-      ...(perDimension ? [gateCell] : []),
-      { label: <ScoreBar value={agg.mean} threshold={bar} /> },
+      {
+        label: (
+          <span
+            className="mono"
+            style={{
+              fontSize: 13,
+              color: bar === null ? "var(--text-subtle)" : "var(--text-muted)",
+            }}
+          >
+            {bar === null ? "—" : `≥ ${barPct(bar)}`}
+          </span>
+        ),
+      },
+      {
+        label: (
+          <ScoreBar value={agg.mean} threshold={bar} cleared={clearedOf(agg)} />
+        ),
+      },
       {
         label: (
           <span className="mono" style={{ fontSize: 13 }}>
@@ -129,24 +122,24 @@ export default function Breakdown() {
   return (
     <AsyncView state={state}>
       {(data) => {
-        // A model gate is one scalar bar; an agent gate is one bar per
-        // dimension, all of which must clear. Show each evaluator against its
-        // own bar rather than collapsing the gate into a single number.
-        const gate = data.gate_thresholds;
-        const scalar = data.threshold;
-        const aggEntries: AggRow[] = Object.entries(data.aggregates)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([name, agg]) => ({
-            name,
-            agg,
-            bar: barFor(name, gate, scalar),
-            perDimension: gate !== null,
-          }));
+        // A model gate is one bar on one judged score; an agent gate is one
+        // bar per dimension, all of which must clear. `?? null` because a
+        // stale payload can omit these keys, and undefined must mean "none".
+        const gate = data.gate_thresholds ?? null;
+        const scalar = data.threshold ?? null;
+        const aggEntries = Object.entries(data.aggregates).sort(([a], [b]) =>
+          a.localeCompare(b)
+        );
+        // The evaluator(s) a model gate's single bar actually judged.
+        const judged = aggEntries
+          .filter(([, agg]) => barOf(agg) !== null)
+          .map(([name]) => name);
 
-        const chartData = aggEntries.map(({ name, agg, bar }) => ({
+        const chartData = aggEntries.map(([name, agg]) => ({
           name,
           mean: agg.mean * 100,
-          bar,
+          bar: barOf(agg),
+          cleared: clearedOf(agg),
         }));
 
         const langfuseDeep = `${data.langfuse_url}/trace`;
@@ -191,7 +184,7 @@ export default function Breakdown() {
                 title={String(data.total_items)}
                 size="lg"
               />
-              {gate ? (
+              {gate !== null ? (
                 <BigStat
                   label="Gate (all must clear)"
                   title={`${Object.keys(gate).length} dims`}
@@ -200,32 +193,37 @@ export default function Breakdown() {
                 />
               ) : (
                 <BigStat
-                  label="Threshold"
+                  label={
+                    judged.length > 0 ? `Threshold · ${judged.join(", ")}` : "Threshold"
+                  }
                   title={scalar !== null ? barPct(scalar) : "—"}
                   size="lg"
                   state="muted"
                 />
               )}
-              {aggEntries.map(({ name, agg, bar, perDimension }) => (
-                <BigStat
-                  key={name}
-                  label={
-                    !perDimension || bar === null ? (
-                      name
-                    ) : (
-                      <>
-                        {name}{" "}
-                        <span style={{ color: "var(--text-muted)" }}>
-                          ≥ {barPct(bar)}
-                        </span>
-                      </>
-                    )
-                  }
-                  title={`${(agg.mean * 100).toFixed(1)}%`}
-                  size="lg"
-                  error={bar !== null && agg.mean < bar}
-                />
-              ))}
+              {aggEntries.map(([name, agg]) => {
+                const bar = barOf(agg);
+                return (
+                  <BigStat
+                    key={name}
+                    label={
+                      bar === null ? (
+                        name
+                      ) : (
+                        <>
+                          {name}{" "}
+                          <span style={{ color: "var(--text-muted)" }}>
+                            ≥ {barPct(bar)}
+                          </span>
+                        </>
+                      )
+                    }
+                    title={`${(agg.mean * 100).toFixed(1)}%`}
+                    size="lg"
+                    error={clearedOf(agg) === false}
+                  />
+                );
+              })}
             </div>
 
             {chartData.length > 0 && (
@@ -267,16 +265,11 @@ export default function Breakdown() {
                         domain={[0, 100]}
                         tickFormatter={(v) => `${v}%`}
                       />
-                      {/* One line only makes sense when one bar applies to
-                          every evaluator; an agent gate's per-dimension bars
-                          are on each bar's tooltip and stat card instead. */}
-                      {!gate && scalar !== null && (
-                        <ReferenceLine
-                          y={scalar * 100}
-                          stroke={chart.threshold}
-                          strokeDasharray="4 4"
-                        />
-                      )}
+                      {/* No reference line: no single bar applies to every
+                          evaluator (a model gate's bar judges one score), so a
+                          line across all of them would imply bars that don't
+                          exist. Each bar's own gate is in its tooltip, its
+                          stat card, and the Gate column below. */}
                       <Tooltip
                         contentStyle={{
                           background: chart.tooltipBg,
@@ -288,13 +281,12 @@ export default function Breakdown() {
                         labelStyle={{ color: chart.tooltipText }}
                         itemStyle={{ color: chart.tooltipText }}
                         formatter={(v: number, _name, item) => {
-                          // Only an agent gate names a bar per dimension.
-                          const bar = gate
-                            ? (item?.payload as { bar: number | null })?.bar
-                            : null;
+                          const bar =
+                            (item?.payload as { bar?: number | null } | undefined)
+                              ?.bar ?? null;
                           return [
-                            bar === null || bar === undefined
-                              ? `${v.toFixed(1)}%`
+                            bar === null
+                              ? `${v.toFixed(1)}% (not gated)`
                               : `${v.toFixed(1)}% (gate ≥ ${barPct(bar)})`,
                             "Mean",
                           ];
@@ -305,9 +297,9 @@ export default function Breakdown() {
                           <Cell
                             key={d.name}
                             fill={
-                              d.bar === null
+                              d.cleared === null
                                 ? chart.neutral
-                                : d.mean >= d.bar * 100
+                                : d.cleared
                                   ? chart.pass
                                   : chart.fail
                             }
@@ -328,7 +320,7 @@ export default function Breakdown() {
               className="section"
             >
               <Table
-                headers={gate ? GATE_HEADERS : SCALAR_HEADERS}
+                headers={HEADERS}
                 rows={aggEntries.map(aggRow)}
                 size="md"
                 noDataMessage="No evaluator scores recorded."
