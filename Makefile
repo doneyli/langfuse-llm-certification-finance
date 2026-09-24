@@ -5,6 +5,7 @@
 #   make preflight      # verify credentials + Langfuse connectivity (go/no-go)
 #   make seed           # load sample data + register score configs, queues, prompts
 #   make gate           # run the model deployment gate (PASS/FAIL)
+#   make ci-gate        # run the agent gate the way CI does (exit 1 on FAIL)
 #   make portal         # build + launch the Certification Portal on :8050
 #
 # Or the whole non-interactive setup at once (stops before the long-running portal):
@@ -40,7 +41,7 @@ else
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help install preflight seed gate agent-gate demo export portal test up down quickstart
+.PHONY: help install preflight seed gate agent-gate ci-gate demo export portal test up down quickstart
 
 help: ## Show this help
 	@echo "Deployment Gates — make targets:"
@@ -83,6 +84,10 @@ gate: ## Run the model deployment gate (MODEL, DATASET overridable)
 agent-gate: ## Run the agent gate (USE_CASE + MODEL overridable; dataset auto-routes per agent)
 	@echo "agent-gate: use_case=$(USE_CASE)  model=$(MODEL)  dataset=$(AGENT_DATASET)"
 	$(PY) run_usecase_certification.py --use-case $(USE_CASE) --dataset $(AGENT_DATASET) --model $(MODEL) --queue-failures
+
+ci-gate: ## Run the agent gate exactly as CI runs it (--ci: exit 1 on FAIL, no queueing)
+	@echo "ci-gate: use_case=$(USE_CASE)  model=$(MODEL)  dataset=$(AGENT_DATASET)"
+	$(PY) run_usecase_certification.py --use-case $(USE_CASE) --dataset $(AGENT_DATASET) --model $(MODEL) --ci
 
 demo: ## Full-lifecycle demo for one agent (scripts/demo_usecase.sh; uses uv)
 	bash scripts/demo_usecase.sh

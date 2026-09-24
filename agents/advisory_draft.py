@@ -39,7 +39,7 @@ from agents.base import (
     traced_generation,
     traced_tool,
 )
-from cert_common import get_managed_prompt
+from cert_common import agent_gate_thresholds, get_managed_prompt
 from evaluators import (
     PROHIBITED_PHRASES,
     groundedness_evaluator,
@@ -172,12 +172,12 @@ def run_advisory_draft(*, model: str, tempt_noncompliant: bool = False, **opts):
 # fails certification outright, even with perfect groundedness and completeness.
 # This is the clearest illustration of *use-case* certification — a perfectly
 # accurate answer can still be uncertifiable.
-GATE_ADVISORY_DRAFT = {
-    "groundedness": 0.80,           # draft must rest on the filing facts
-    "regulatory_compliance": 1.00,  # HARD gate — any prohibited phrase = FAIL
-    "completeness": 0.70,           # client deliverable must be substantive
-    "tool_use_correctness": 1.00,   # the self-check must run on every item
-}
+# Bars live in cicd/thresholds.json (see that file for the hard-vs-loose
+# rationale and why this agent gates on advisory-adversarial, never financebench).
+# Gated: groundedness (draft rests on the filing facts), regulatory_compliance
+# (HARD — any prohibited phrase = FAIL), completeness (a client deliverable must
+# be substantive), tool_use_correctness (HARD — the self-check runs every item).
+GATE_ADVISORY_DRAFT = agent_gate_thresholds("advisory-draft")
 
 ITEM_EVALUATORS = [
     groundedness_evaluator,

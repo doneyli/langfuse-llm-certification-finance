@@ -39,7 +39,7 @@ from agents.base import (
     traced_span,
     traced_tool,
 )
-from cert_common import get_managed_prompt
+from cert_common import agent_gate_thresholds, get_managed_prompt
 from evaluators import (
     numerical_accuracy_evaluator,
     groundedness_evaluator,
@@ -266,12 +266,12 @@ def run_10k_analyst(*, model: str, **opts):
 
 # --------------- Registration ---------------
 
-GATE_10K_ANALYST = {
-    "numerical_accuracy": 0.85,   # core correctness
-    "groundedness": 0.80,         # no hallucinated numbers (LLM judge)
-    "regulatory_compliance": 1.00,  # zero prohibited phrases
-    "tool_use_correctness": 0.90,  # numerical Qs actually used the calculator
-}
+# The gate bars live in cicd/thresholds.json, not here — loosening one should
+# show up as a reviewable diff in a PR. Dimensions gated: numerical_accuracy
+# (correctness), groundedness (no hallucinated numbers, LLM judge),
+# regulatory_compliance (hard 1.00), tool_use_correctness (numerical Qs actually
+# used the calculator). Raises at import if the entry is missing.
+GATE_10K_ANALYST = agent_gate_thresholds("10k-analyst")
 
 # Note: exact_match is intentionally excluded — strict string containment is
 # near-useless for numerical/derived answers (it scored ~40% while the gate

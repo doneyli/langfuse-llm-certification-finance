@@ -7,6 +7,9 @@ Shared certification helpers used by both the model-cert runner
 Centralizing these avoids copy-paste drift between the two runners and gives a
 single home for the Langfuse lifecycle plumbing:
 
+  agent_gate_thresholds   - the gate bars for one use case, read from
+                            cicd/thresholds.json (the quality bar as code)
+  model_gate_threshold    - the model-cert pass bar, same file
   langfuse_creds          - host + basic-auth header from env
   get_managed_prompt      - fetch a Langfuse-managed prompt (production label),
                             falling back to a hardcoded template (prompt mgmt)
@@ -20,9 +23,73 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
 
 
 REVIEW_QUEUE_NAME = "Certification Review"
+
+THRESHOLDS_PATH = Path(__file__).resolve().parent / "cicd" / "thresholds.json"
+
+
+# --------------- The quality bar (thresholds as code) ---------------
+
+_thresholds_cache: dict = {}
+
+
+def load_thresholds(path=None) -> dict:
+    """Read and cache cicd/thresholds.json — the single source of truth for gates.
+
+    Keys starting with '_' are commentary and are dropped. Read at import time by
+    every agent module, so the parsed result is cached per resolved path. Pass an
+    explicit ``path`` to read a different file (tests use a stub).
+    """
+    key = str(Path(path).resolve()) if path else str(THRESHOLDS_PATH)
+    if key not in _thresholds_cache:
+        try:
+            raw = json.loads(Path(key).read_text())
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Gate thresholds file missing: {key}\n"
+                f"This file IS the quality bar — the gates cannot run without it. "
+                f"Restore it from git rather than hardcoding thresholds back into "
+                f"the agent modules."
+            ) from None
+        _thresholds_cache[key] = {k: v for k, v in raw.items()
+                                  if not k.startswith("_")}
+    return _thresholds_cache[key]
+
+
+def agent_gate_thresholds(use_case: str, *, path=None) -> dict:
+    """Return {score_name: min_threshold} for one use case.
+
+    Raises on a missing or empty entry, deliberately. ``usecase_certification_gate``
+    is ``all()`` over the dimensions it is handed, and ``all()`` over an empty dict
+    is ``True`` — so an agent registered with no thresholds would report PASSED
+    unconditionally. Failing loudly at import time is the only safe behavior: a
+    gate that cannot find its bar must not run, rather than pass everything.
+    """
+    gates = load_thresholds(path).get("agent_gates", {})
+    thresholds = gates.get(use_case)
+    if not thresholds:
+        known = ", ".join(sorted(gates)) or "(none)"
+        raise KeyError(
+            f"No gate thresholds for use case '{use_case}' in "
+            f"{path or THRESHOLDS_PATH}. Known use cases: {known}. "
+            f"An empty gate certifies everything as PASSED, so this is fatal "
+            f"rather than a default."
+        )
+    return {name: float(v) for name, v in thresholds.items()}
+
+
+def model_gate_threshold(*, path=None) -> float:
+    """Return the model-certification pass bar (run_certification.py --threshold)."""
+    model_gate = load_thresholds(path).get("model_gate", {})
+    threshold = model_gate.get("default_threshold")
+    if threshold is None:
+        raise KeyError(
+            f"No model_gate.default_threshold in {path or THRESHOLDS_PATH}."
+        )
+    return float(threshold)
 
 
 # --------------- Credentials ---------------
