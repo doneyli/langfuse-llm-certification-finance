@@ -38,6 +38,14 @@ phrase in client-facing output is a defect rather than a budget to spend, while
 the single LLM-as-a-judge dimension is gated loosely at `0.80` because a judge
 carries run-to-run noise and a tight judge bar buys flaky gates.
 
+## The verdict is a boolean score
+
+Each run's verdict is written to Langfuse as the run-level score
+`certification_result`, a **BOOLEAN** (`true` = every bar in this file cleared,
+`false` = at least one did not), stored on the experiment with a per-dimension
+breakdown in its comment. The bars themselves are recorded in the experiment's
+metadata, so a historical run reports the bar it was judged by.
+
 The file also records what **no** bar here covers — persona and tone are not
 gated, so a regression in how an answer *reads* cannot fail these gates — and
 that the calibrated bars have not been repeat-run variance-tested. Read the

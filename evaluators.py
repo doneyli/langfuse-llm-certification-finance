@@ -148,20 +148,20 @@ def exact_match_evaluator(*, output, expected_output, **kwargs):
     """Check if the expected answer string appears in the model output."""
     output = _answer_text(output)
     if not output or not expected_output:
-        return Evaluation(name="exact_match", value=0.0, comment="Missing output or expected_output")
+        return Evaluation(name="exact_match", data_type="BOOLEAN", value=0.0, comment="Missing output or expected_output")
 
     answer = expected_output.get("answer", "") if isinstance(expected_output, dict) else str(expected_output)
     if not answer:
-        return Evaluation(name="exact_match", value=0.0, comment="No expected answer defined")
+        return Evaluation(name="exact_match", data_type="BOOLEAN", value=0.0, comment="No expected answer defined")
 
     answer_clean = answer.strip().lower()
     output_clean = output.strip().lower()
 
     if answer_clean in output_clean:
-        return Evaluation(name="exact_match", value=1.0,
+        return Evaluation(name="exact_match", data_type="BOOLEAN", value=1.0,
                           comment=f"Found exact answer: {answer[:60]}")
 
-    return Evaluation(name="exact_match", value=0.0,
+    return Evaluation(name="exact_match", data_type="BOOLEAN", value=0.0,
                       comment=f"Expected '{answer[:60]}' not found in output")
 
 
@@ -172,12 +172,12 @@ def numerical_accuracy_evaluator(*, output, expected_output, **kwargs):
     """
     output = _answer_text(output)
     if not output or not expected_output:
-        return Evaluation(name="numerical_accuracy", value=0.0,
+        return Evaluation(name="numerical_accuracy", data_type="BOOLEAN", value=0.0,
                           comment="Missing output or expected_output")
 
     answer = expected_output.get("answer", "") if isinstance(expected_output, dict) else str(expected_output)
     if not answer:
-        return Evaluation(name="numerical_accuracy", value=0.0,
+        return Evaluation(name="numerical_accuracy", data_type="BOOLEAN", value=0.0,
                           comment="No expected answer defined")
 
     expected_nums = _extract_numbers(answer)
@@ -186,18 +186,18 @@ def numerical_accuracy_evaluator(*, output, expected_output, **kwargs):
         answer_clean = answer.strip().lower()
         output_clean = output.strip().lower()
         if answer_clean[:20] in output_clean:
-            return Evaluation(name="numerical_accuracy", value=1.0,
+            return Evaluation(name="numerical_accuracy", data_type="BOOLEAN", value=1.0,
                               comment="Non-numerical match (string containment)")
-        return Evaluation(name="numerical_accuracy", value=0.0,
+        return Evaluation(name="numerical_accuracy", data_type="BOOLEAN", value=0.0,
                           comment=f"Non-numerical, no string match for: {answer[:60]}")
 
     actual_nums = _extract_numbers(output)
     matched, detail = _numbers_match(expected_nums, actual_nums)
 
     if matched:
-        return Evaluation(name="numerical_accuracy", value=1.0, comment=detail)
+        return Evaluation(name="numerical_accuracy", data_type="BOOLEAN", value=1.0, comment=detail)
 
-    return Evaluation(name="numerical_accuracy", value=0.0,
+    return Evaluation(name="numerical_accuracy", data_type="BOOLEAN", value=0.0,
                       comment=f"Numerical mismatch. {detail}")
 
 
@@ -208,7 +208,7 @@ def sentiment_evaluator(*, output, expected_output, **kwargs):
     """
     output = _answer_text(output)
     if not output or not expected_output:
-        return Evaluation(name="sentiment_accuracy", value=0.0,
+        return Evaluation(name="sentiment_accuracy", data_type="BOOLEAN", value=0.0,
                           comment="Missing output or expected_output")
 
     expected = expected_output.get("sentiment", "") if isinstance(expected_output, dict) else str(expected_output)
@@ -233,14 +233,14 @@ def sentiment_evaluator(*, output, expected_output, **kwargs):
             break
 
     if detected is None:
-        return Evaluation(name="sentiment_accuracy", value=0.0,
+        return Evaluation(name="sentiment_accuracy", data_type="BOOLEAN", value=0.0,
                           comment=f"Could not detect sentiment in output. Expected: {expected}")
 
     if detected == expected:
-        return Evaluation(name="sentiment_accuracy", value=1.0,
+        return Evaluation(name="sentiment_accuracy", data_type="BOOLEAN", value=1.0,
                           comment=f"Correct: {detected}")
 
-    return Evaluation(name="sentiment_accuracy", value=0.0,
+    return Evaluation(name="sentiment_accuracy", data_type="BOOLEAN", value=0.0,
                       comment=f"Incorrect: detected '{detected}', expected '{expected}'")
 
 
@@ -251,7 +251,7 @@ def regulatory_compliance_evaluator(*, output, **kwargs):
     """
     output = _answer_text(output)
     if not output:
-        return Evaluation(name="regulatory_compliance", value=1.0,
+        return Evaluation(name="regulatory_compliance", data_type="BOOLEAN", value=1.0,
                           comment="No output to check")
 
     output_lower = output.lower()
@@ -259,12 +259,12 @@ def regulatory_compliance_evaluator(*, output, **kwargs):
 
     if violations:
         return Evaluation(
-            name="regulatory_compliance",
+            name="regulatory_compliance", data_type="BOOLEAN",
             value=0.0,
             comment=f"Violations found: {', '.join(violations)}"
         )
 
-    return Evaluation(name="regulatory_compliance", value=1.0,
+    return Evaluation(name="regulatory_compliance", data_type="BOOLEAN", value=1.0,
                       comment="No prohibited phrases detected")
 
 
@@ -346,7 +346,7 @@ def tool_use_correctness_evaluator(*, output, metadata=None, **kwargs):
     # even when their reasoning string mentions "numerical").
     if any(ex in reasoning for ex in TRAJECTORY_EXEMPTIONS):
         return Evaluation(
-            name="tool_use_correctness", value=1.0,
+            name="tool_use_correctness", data_type="BOOLEAN", value=1.0,
             comment=f"No tool required (judgment/extraction) for '{reasoning}'",
         )
 
@@ -356,20 +356,20 @@ def tool_use_correctness_evaluator(*, output, metadata=None, **kwargs):
 
     if not required:
         return Evaluation(
-            name="tool_use_correctness", value=1.0,
+            name="tool_use_correctness", data_type="BOOLEAN", value=1.0,
             comment=f"No tool required for '{reasoning or 'unspecified'}'",
         )
 
     missing = [t for t in required if t not in tools_used]
     if missing:
         return Evaluation(
-            name="tool_use_correctness", value=0.0,
+            name="tool_use_correctness", data_type="BOOLEAN", value=0.0,
             comment=f"'{reasoning}' requires {required}; missing {missing}; "
                     f"tools_used={tools_used}",
         )
 
     return Evaluation(
-        name="tool_use_correctness", value=1.0,
+        name="tool_use_correctness", data_type="BOOLEAN", value=1.0,
         comment=f"Trajectory appropriate for '{reasoning}' (used {required})",
     )
 
@@ -515,14 +515,14 @@ def certification_gate(score_name: str, threshold: float = DEFAULT_THRESHOLD):
             if ev.name == score_name and ev.value is not None
         ]
         if not values:
-            return Evaluation(name="certification_result", value=0.0,
+            return Evaluation(name="certification_result", data_type="BOOLEAN", value=0.0,
                               comment="FAILED - no scores collected")
 
         avg = sum(values) / len(values)
         passed = avg >= threshold
 
         return Evaluation(
-            name="certification_result",
+            name="certification_result", data_type="BOOLEAN",
             value=1.0 if passed else 0.0,
             comment=f"{'PASSED' if passed else 'FAILED'} - "
                     f"avg {score_name}: {avg:.1%} "
@@ -566,7 +566,7 @@ def usecase_certification_gate(thresholds: dict):
             for name, (avg, ok, thr, _) in rows.items()
         )
         return Evaluation(
-            name="certification_result",
+            name="certification_result", data_type="BOOLEAN",
             value=1.0 if passed else 0.0,
             comment=f"{'PASSED' if passed else 'FAILED'} - {detail}",
         )

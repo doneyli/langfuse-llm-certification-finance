@@ -5,9 +5,18 @@ Create Score Configs in Langfuse
 Registers score configurations for all evaluators so that scores are validated,
 have proper types/ranges, and display with descriptions in the Langfuse UI.
 
+Pass/fail scores (the gate verdict ``certification_result`` and the binary
+item checks) are BOOLEAN, which unlocks boolean dashboard widgets, alerts on the
+true-rate, and Score Analytics confusion matrices. A config's dataType cannot be
+changed, so a project that already registered them as NUMERIC is migrated only
+on request: ``--migrate-configs`` archives the old config and creates the
+BOOLEAN one (scores already written keep their old type).
+
 Usage:
-    python setup_score_configs.py              # Create all score configs
-    python setup_score_configs.py --dry-run    # Preview without creating
+    python setup_score_configs.py                           # Create missing configs
+    python setup_score_configs.py --dry-run                 # Preview, incl. type mismatches
+    python setup_score_configs.py --migrate-configs --dry-run
+    python setup_score_configs.py --migrate-configs         # Archive NUMERIC -> create BOOLEAN
 
 Environment variables:
     LANGFUSE_PUBLIC_KEY  (required)
@@ -30,35 +39,27 @@ SCORE_CONFIGS = [
     # Deterministic item-level evaluators
     {
         "name": "numerical_accuracy",
-        "dataType": "NUMERIC",
-        "minValue": 0,
-        "maxValue": 1,
+        "dataType": "BOOLEAN",
         "description": "Whether the model's numerical answer matches the expected value "
-                       "within 5% tolerance. 1.0 = match, 0.0 = mismatch.",
+                       "within 5% tolerance. true = match, false = mismatch.",
     },
     {
         "name": "exact_match",
-        "dataType": "NUMERIC",
-        "minValue": 0,
-        "maxValue": 1,
+        "dataType": "BOOLEAN",
         "description": "Whether the expected answer string appears verbatim in the model "
-                       "output. 1.0 = found, 0.0 = not found.",
+                       "output. true = found, false = not found.",
     },
     {
         "name": "sentiment_accuracy",
-        "dataType": "NUMERIC",
-        "minValue": 0,
-        "maxValue": 1,
+        "dataType": "BOOLEAN",
         "description": "Whether the model correctly classified the financial text sentiment "
-                       "(positive/negative/neutral). 1.0 = correct, 0.0 = incorrect.",
+                       "(positive/negative/neutral). true = correct, false = incorrect.",
     },
     {
         "name": "regulatory_compliance",
-        "dataType": "NUMERIC",
-        "minValue": 0,
-        "maxValue": 1,
+        "dataType": "BOOLEAN",
         "description": "Whether the model output is free of prohibited financial phrases "
-                       "(e.g., 'guaranteed returns', 'risk-free'). 1.0 = clean, 0.0 = violation.",
+                       "(e.g., 'guaranteed returns', 'risk-free'). true = clean, false = violation.",
     },
     {
         "name": "completeness",
@@ -81,12 +82,10 @@ SCORE_CONFIGS = [
     # Trajectory evaluator (use-case / agent certification)
     {
         "name": "tool_use_correctness",
-        "dataType": "NUMERIC",
-        "minValue": 0,
-        "maxValue": 1,
+        "dataType": "BOOLEAN",
         "description": "Use-case certification: whether the agent's trajectory matched "
                        "the question type (e.g. used the calculator tool for "
-                       "numerical-reasoning questions). 1.0 = correct path, 0.0 = "
+                       "numerical-reasoning questions). true = correct path, false = "
                        "required tool not invoked.",
     },
     # Run-level evaluators (aggregated)
@@ -137,11 +136,10 @@ SCORE_CONFIGS = [
     },
     {
         "name": "certification_result",
-        "dataType": "NUMERIC",
-        "minValue": 0,
-        "maxValue": 1,
-        "description": "Certification gate: 1.0 = PASSED (primary score meets threshold), "
-                       "0.0 = FAILED. Threshold is configurable (default: 85%).",
+        "dataType": "BOOLEAN",
+        "description": "Deployment gate verdict (run-level, on the experiment): "
+                       "true = PASSED (every gated score met its bar in "
+                       "cicd/thresholds.json), false = FAILED.",
     },
     # Human review score configs (for Annotation Queues)
     {
@@ -177,14 +175,52 @@ def get_auth_header(public_key: str, secret_key: str) -> str:
 
 
 def list_existing_configs(host: str, auth: str) -> dict:
-    """Fetch existing score configs and return as {name: config} dict."""
+    """Fetch existing, non-archived score configs as a {name: config} dict."""
+    out, page = {}, 1
+    while True:
+        req = urllib.request.Request(
+            f"{host}/api/public/score-configs?limit=100&page={page}",
+            headers={"Authorization": f"Basic {auth}"},
+        )
+        data = json.loads(urllib.request.urlopen(req).read())
+        for cfg in data.get("data", []):
+            if not cfg.get("isArchived"):
+                out[cfg["name"]] = cfg
+        if page >= ((data.get("meta") or {}).get("totalPages") or 1):
+            return out
+        page += 1
+
+
+def plan_config_changes(existing: dict, desired: list) -> list:
+    """Decide per desired config: ``create``, ``skip`` or ``migrate``.
+
+    ``migrate`` means a live config of that name exists with a different
+    dataType — it cannot be changed in place (Langfuse rejects dataType
+    edits), so it must be archived and recreated. Returns
+    ``[(action, desired_cfg, existing_cfg_or_None)]``.
+    """
+    plan = []
+    for cfg in desired:
+        current = existing.get(cfg["name"])
+        if current is None:
+            plan.append(("create", cfg, None))
+        elif current.get("dataType") != cfg["dataType"]:
+            plan.append(("migrate", cfg, current))
+        else:
+            plan.append(("skip", cfg, current))
+    return plan
+
+
+def archive_config(host: str, auth: str, config_id: str) -> dict:
+    """Archive a score config (PATCH isArchived=true). Scores keep their data."""
     req = urllib.request.Request(
-        f"{host}/api/public/score-configs?limit=100",
-        headers={"Authorization": f"Basic {auth}"},
+        f"{host}/api/public/score-configs/{config_id}",
+        data=json.dumps({"isArchived": True}).encode(),
+        headers={"Authorization": f"Basic {auth}",
+                 "Content-Type": "application/json"},
+        method="PATCH",
     )
-    resp = urllib.request.urlopen(req)
-    data = json.loads(resp.read())
-    return {cfg["name"]: cfg for cfg in data.get("data", [])}
+    return json.loads(urllib.request.urlopen(req).read())
 
 
 def create_config(host: str, auth: str, config: dict) -> dict:
@@ -211,6 +247,10 @@ def parse_args():
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview configs without creating them")
+    parser.add_argument("--migrate-configs", action="store_true",
+                        help="For configs registered with a different dataType "
+                             "(e.g. NUMERIC -> BOOLEAN): archive the old config "
+                             "and create the new one")
     return parser.parse_args()
 
 
@@ -243,7 +283,8 @@ def main():
     print(f"  Configs: {len(SCORE_CONFIGS)}", file=sys.stderr)
 
     if args.dry_run:
-        print("\n  ** DRY RUN - no configs will be created **\n", file=sys.stderr)
+        print("\n  ** DRY RUN - no configs will be created or archived **\n",
+              file=sys.stderr)
         for cfg in SCORE_CONFIGS:
             dtype = cfg["dataType"]
             range_str = ""
@@ -251,32 +292,63 @@ def main():
                 range_str = f" [{cfg['minValue']}-{cfg['maxValue']}]"
             print(f"  {cfg['name']:30s} {dtype}{range_str}", file=sys.stderr)
             print(f"    {cfg['description'][:80]}...", file=sys.stderr)
-        return
 
-    # Check existing configs to avoid duplicates
+    # Check existing configs to avoid duplicates and spot type mismatches
     existing = list_existing_configs(host, auth)
-    print(f"  Existing: {len(existing)} configs\n", file=sys.stderr)
+    print(f"\n  Existing: {len(existing)} configs\n", file=sys.stderr)
 
-    created = 0
-    skipped = 0
-    for cfg in SCORE_CONFIGS:
-        if cfg["name"] in existing:
-            print(f"  [skip] {cfg['name']} (already exists)", file=sys.stderr)
+    created = skipped = migrated = mismatched = 0
+    for action, cfg, current in plan_config_changes(existing, SCORE_CONFIGS):
+        name = cfg["name"]
+        if action == "skip":
+            print(f"  [skip] {name} (already exists)", file=sys.stderr)
             skipped += 1
             continue
-
+        if action == "migrate":
+            if not args.migrate_configs:
+                print(f"  [mismatch] {name}: registered {current['dataType']}, "
+                      f"wanted {cfg['dataType']} — rerun with --migrate-configs "
+                      f"to archive {current['id']} and create a "
+                      f"{cfg['dataType']} config", file=sys.stderr)
+                mismatched += 1
+                continue
+            if args.dry_run:
+                print(f"  [would migrate] {name}: archive {current['dataType']} "
+                      f"config {current['id']}, create {cfg['dataType']}",
+                      file=sys.stderr)
+                migrated += 1
+                continue
+            try:
+                archive_config(host, auth, current["id"])
+                print(f"  [archived] {name} ({current['dataType']}, id: "
+                      f"{current['id']})", file=sys.stderr)
+            except urllib.error.HTTPError as e:
+                print(f"  [error] archiving {name}: {e.code} {e.read().decode()}",
+                      file=sys.stderr)
+                continue
+        if args.dry_run:
+            print(f"  [would create] {name} ({cfg['dataType']})", file=sys.stderr)
+            created += 1
+            continue
         try:
             result = create_config(host, auth, cfg)
-            print(f"  [created] {cfg['name']} (id: {result['id']})",
+            print(f"  [created] {name} ({cfg['dataType']}, id: {result['id']})",
                   file=sys.stderr)
-            created += 1
+            if action == "migrate":
+                migrated += 1
+            else:
+                created += 1
         except urllib.error.HTTPError as e:
             body = e.read().decode()
-            print(f"  [error] {cfg['name']}: {e.code} {body}", file=sys.stderr)
+            print(f"  [error] {name}: {e.code} {body}", file=sys.stderr)
 
     print(f"\n{'=' * 50}", file=sys.stderr)
-    print(f"  Created: {created}", file=sys.stderr)
-    print(f"  Skipped: {skipped} (already existed)", file=sys.stderr)
+    print(f"  Created:  {created}", file=sys.stderr)
+    print(f"  Migrated: {migrated}", file=sys.stderr)
+    print(f"  Skipped:  {skipped} (already existed)", file=sys.stderr)
+    if mismatched:
+        print(f"  Type mismatches left as-is: {mismatched} "
+              f"(see --migrate-configs)", file=sys.stderr)
     print(f"\nVerify in Langfuse UI: Settings > Score Configs", file=sys.stderr)
 
 

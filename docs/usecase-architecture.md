@@ -40,7 +40,7 @@ are now merged to `main`.
         │                AGENT  (agents/<use_case>.py)                   │
         │   one nested trace per dataset item:                           │
         │                                                                │
-        │     plan (generation) ─▶ retrieve (span) ─▶ calculate (tool)   │
+        │     plan (generation) ─▶ retrieve (retriever) ─▶ calculate (tool)│
         │                                       └────▶ compose (gen)     │
         │   returns AgentResult{answer, trajectory}                      │
         └────────────┬─────────────────────────────────────────────────┘
@@ -85,7 +85,7 @@ usecase:10k-analyst                                   trace (run_experiment item
 │  output: {answer, trajectory{steps, tools_used, operands, citations}}
 │
 ├── plan                 generation   model=claude-…  in:question+qtype  out:"CALCULATE: revenue / avg PP&E"
-├── retrieve-evidence    span                          out:{operands:{revenue:6489, ppe_2019:253, ppe_2018:282}}
+├── retrieve-evidence    retriever                     out:{operands:{revenue:6489, ppe_2019:253, ppe_2018:282}}
 ├── calculate            tool                           in:"6489/((253+282)/2)"  out:24.26
 └── compose-answer       generation   model=claude-…  out:"The FY2019 fixed asset turnover is 24.26 …"
 │
@@ -93,9 +93,11 @@ usecase:10k-analyst                                   trace (run_experiment item
                    regulatory_compliance=1.0  tool_use_correctness=1.0
 ```
 
-Run-level scores attached to the first trace: `avg_numerical_accuracy`,
+Run-level scores stored on the experiment: `avg_numerical_accuracy`,
 `avg_groundedness`, `avg_regulatory_compliance`, `avg_tool_use_correctness`,
-`certification_result` (1.0 PASS / 0.0 FAIL with a per-dimension breakdown comment).
+`certification_result` (BOOLEAN: true = PASS / false = FAIL, with a per-dimension
+breakdown comment). Every item's steps sit under one `usecase:<name>` **agent**
+observation, so Langfuse renders an Agent Graph for the trace.
 
 ---
 

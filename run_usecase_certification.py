@@ -51,6 +51,7 @@ except ImportError:
     sys.exit(1)
 
 from agents import AGENT_REGISTRY
+from agents.base import as_agent_task
 from evaluators import average_score_evaluator, usecase_certification_gate
 from cert_common import queue_failed_items
 
@@ -198,7 +199,9 @@ def main():
         return
 
     # Build the agent task and the evaluator set from the registry (single source).
-    task = entry["fn"](model=args.model)
+    # Each item runs inside one `agent` observation (usecase:<name>), which
+    # gives the trace its Agent Graph in Langfuse.
+    task = as_agent_task(entry["fn"](model=args.model), args.use_case)
     item_evaluators = entry["item_evaluators"]
     run_evaluators = [average_score_evaluator(dim) for dim in gate_dims]
     run_evaluators.append(usecase_certification_gate(gate_thresholds))

@@ -30,7 +30,7 @@ from evaluators import (
 def _patch_llm(monkeypatch, responses, capture=None):
     """responses: dict span-name -> returned text. capture: optional dict to record
     the `user` prompt each generation received (for asserting prompt selection)."""
-    def fake_generation(*, name, system, user, model, max_tokens=1024):
+    def fake_generation(*, name, system, user, model, max_tokens=1024, prompt=None):
         if capture is not None:
             capture[name] = user
         return responses[name]

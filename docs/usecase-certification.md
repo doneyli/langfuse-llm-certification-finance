@@ -349,9 +349,9 @@ named line items into a `{name: number}` dict), `_formula_from_plan`, `safe_eval
 ### 4.2 Trace the agent emits
 
 ```
-usecase:10k-analyst                                  (trace = experiment item)
+usecase:10k-analyst                  (agent)       (one per experiment item)
 ├── plan                 (generation)  in: question+qtype   out: plan text ("CALCULATE: revenue/avg_ppe")
-├── retrieve-evidence    (span)        in: plan             out: {operands, citations}
+├── retrieve-evidence    (retriever)   in: plan             out: {operands, citations}
 ├── calculate            (tool)        in: "6489/((253+282)/2)"  out: 24.26     ← only for numerical/logical
 └── compose-answer       (generation)  in: operands+computed     out: "$24.26 ..."
 ```
@@ -452,7 +452,7 @@ def run_sentiment_triage(*, model: str, **opts):
 ### 5.2 Trace
 
 ```
-usecase:sentiment-triage
+usecase:sentiment-triage   (agent)
 ├── classify   (generation)  in: text     out: "negative | 0.82"
 ├── rationale  (span)        out: {driver_phrase: "...declined sharply..."}
 └── route      (tool)        in: {confidence: 0.82}  out: {action: "auto-accept"}
@@ -537,10 +537,10 @@ def run_advisory_draft(*, model: str, **opts):
 ### 6.2 Trace
 
 ```
-usecase:advisory-draft
+usecase:advisory-draft     (agent)
 ├── analyze                (generation)  in: question+evidence  out: extracted facts
 ├── draft                  (generation)  in: facts              out: client-facing prose
-└── compliance-self-check  (tool)        out: {violations: []}
+└── compliance-self-check  (guardrail)   out: {violations: []}
 ```
 
 ### 6.3 Gate profile

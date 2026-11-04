@@ -78,9 +78,9 @@ The code is identical for both — only `LANGFUSE_BASE_URL` changes.
 
 ## Interacting with Langfuse: the CLI and the agent skill (recommended for agents)
 
-Langfuse ships two tools that make an agent far better at working with a live
+Langfuse ships three tools that make an agent far better at working with a live
 Langfuse deployment — inspecting state, verifying a run, iterating on datasets and
-prompts — **without writing Python**. Both authenticate with the **same
+prompts — **without writing Python**. All three authenticate with the **same
 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL`** you already
 put in `.env`, so there is no extra login step. The bootstrap above does not
 depend on them, but you should use them.
@@ -89,15 +89,21 @@ depend on them, but you should use them.
 a thin wrapper over the full Langfuse REST API:
 
 ```bash
-npx langfuse-cli api __schema                          # list every resource
-npx langfuse-cli --env .env api datasets list          # confirm the golden datasets loaded
-npx langfuse-cli --env .env api traces list --limit 10 # see recent gate-run traces
-npx langfuse-cli --env .env api prompts list           # inspect managed prompts
+npx @langfuse/cli api __schema                                   # list every resource
+npx @langfuse/cli --env .env api datasets list                   # confirm the golden datasets loaded
+npx @langfuse/cli --env .env api experiments list \
+    --from-start-time 2026-01-01T00:00:00Z --fields core,scores  # gate runs + their verdicts
+npx @langfuse/cli --env .env api observations list --is-root-observation true --limit 10
+npx @langfuse/cli --env .env api prompts list                    # inspect managed prompts
 ```
 
 `--env .env` loads the repo's credentials from the file (otherwise the CLI reads
-the `LANGFUSE_*` vars from your shell). Install once with `npm i -g langfuse-cli`
-if you prefer `langfuse …` over `npx langfuse-cli …`.
+the `LANGFUSE_*` vars from your shell). Flags are kebab-case
+(`--from-start-time`); `npx @langfuse/cli api <resource> <action> --help` lists
+them. Resources include `experiments`, `experiment-items`, `observations`,
+`evaluators`, `evaluation-rules`, `score-configs`, `prompts`, `datasets` and
+`unstable-dashboards`. Install once with `npm i -g @langfuse/cli` if you prefer
+`langfuse …`. The old `langfuse-cli` package name is deprecated.
 
 **Langfuse agent skill** ([docs](https://langfuse.com/docs/api-and-data-platform/features/agent-skill)) —
 an Agent-Skills-standard skill that teaches an agent Langfuse best practices and
@@ -111,9 +117,21 @@ npx skills add langfuse/skills --skill "langfuse"
 langfuse get-skill
 ```
 
+**Langfuse MCP server** ([docs](https://langfuse.com/docs/api-and-data-platform/features/mcp-server)) —
+the authenticated, project-scoped MCP endpoint (prompts, datasets, scores,
+observations…) at `https://<host>/api/public/mcp`: `https://cloud.langfuse.com`
+(EU), `https://us.cloud.langfuse.com` (US), or your self-hosted URL. It uses
+HTTP Basic auth with the same key pair:
+
+```bash
+claude mcp add --transport http langfuse https://us.cloud.langfuse.com/api/public/mcp \
+  --header "Authorization: Basic $(printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64)"
+```
+
 Use these to answer "did the gate run actually land?" — e.g. after `make gate`,
-`npx langfuse-cli --env .env api datasets list` should show
-`certification/financebench-sample`, and its latest run should carry the new scores.
+`npx @langfuse/cli --env .env api experiments list --from-start-time <today>
+--fields core,scores` should list the new run with its `certification_result`
+score (BOOLEAN: `true` = PASSED).
 
 ## Gotchas (read before editing env or running long jobs)
 

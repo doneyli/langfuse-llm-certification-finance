@@ -10,8 +10,8 @@ call — it is the production safeguard, so it must run on every item.
 
 Trace per dataset item (observations nest under the per-item run_experiment trace):
 
-    usecase:sentiment-triage                 trace
-    ├── classify   (generation)  text -> "<label> | <confidence>"
+    usecase:sentiment-triage (agent)     wraps the item; in: text, out: AgentResult
+    ├── classify   (generation)  text -> "<label> | <confidence>" (managed prompt)
     ├── rationale  (span)        deterministic: phrase driving the sentiment
     └── route      (tool)        confidence >= threshold -> auto-accept, else flag-for-analyst
 
@@ -147,7 +147,7 @@ def run_sentiment_triage(*, model: str, route_threshold: float = ROUTE_THRESHOLD
         raw = traced_generation(
             name="classify", model=model, max_tokens=128,
             system="You are a precise market-news sentiment analyst.",
-            user=classify_user,
+            user=classify_user, prompt=classify_prompt,
         )
         steps.append("classify")
         label, confidence = _parse_label_conf(raw)
