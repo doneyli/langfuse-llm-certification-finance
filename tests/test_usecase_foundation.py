@@ -221,7 +221,10 @@ class TestAgentRegistry:
 class TestImports:
     def test_cert_common_imports(self):
         import cert_common
-        assert hasattr(cert_common, "persist_run_evaluations")
+        # Run-level scores are persisted onto the experiment by the SDK
+        # (run_evaluators); the old duplicate write must not come back.
+        assert not hasattr(cert_common, "persist_run_evaluations")
+        assert hasattr(cert_common, "paginate_cursor")
         assert hasattr(cert_common, "queue_failed_items")
         assert hasattr(cert_common, "get_managed_prompt")
 

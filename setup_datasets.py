@@ -22,7 +22,7 @@ Environment variables:
     LANGFUSE_BASE_URL    (default: https://cloud.langfuse.com)
 
 Prerequisites:
-    pip install 'langfuse>=3.0,<4.0'
+    pip install 'langfuse>=5,<6'
     pip install datasets          # only needed without --sample
 """
 
@@ -35,7 +35,7 @@ from pathlib import Path
 try:
     from langfuse import Langfuse
 except ImportError:
-    print("Error: langfuse package not installed. Run: pip install 'langfuse>=3.0,<4.0'",
+    print("Error: langfuse package not installed. Run: pip install 'langfuse>=5,<6'",
           file=sys.stderr)
     sys.exit(1)
 

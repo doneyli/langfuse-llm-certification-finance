@@ -55,7 +55,7 @@ answers) before you run anything. **Do not proceed past a failing preflight.**
 | Install | `make install` | Python ≥ 3.11 (`uv`, or `PY=python` for pip) | deps installed (`uv sync`, or `pip install -r requirements.txt`) |
 | Preflight | `make preflight` | `.env` filled (both `HUMAN STEP`s done) | `RESULT: READY`, exit 0 |
 | Seed | `make seed` | preflight READY | scripts print created datasets/configs/queues/prompts |
-| Model gate | `make gate` | seed done | stdout shows `PASS`/`FAIL`; run appears in Langfuse → Datasets → Runs |
+| Model gate | `make gate` | seed done | stdout shows `PASS`/`FAIL` and the experiment URL; run appears in Langfuse → Experiments |
 | Agent gate | `make agent-gate` (dataset auto-routes per `USE_CASE`) | seed done + `ANTHROPIC_API_KEY` | per-dimension PASS/FAIL; `usecase:<name>` row |
 | Portal | `make portal` | Node 20+/npm 10+ (frontend builds once) | dashboard at <http://localhost:8050> |
 | Evidence | `make export` | a completed run | markdown evidence pack on stdout |
@@ -117,6 +117,19 @@ Use these to answer "did the gate run actually land?" — e.g. after `make gate`
 
 ## Gotchas (read before editing env or running long jobs)
 
+- **Langfuse v4 cutover (2026-11-16).** Langfuse Cloud removed the legacy read
+  API (`GET /traces`, `/scores`, `/datasets/{name}/runs`, `/dataset-run-items`).
+  Every read in this repo goes through the v4 endpoints (`/experiments`,
+  `/experiment-items`, `/v2/observations`, `/v3/scores`) via
+  `cert_common.api_get` / `paginate_cursor` — use those helpers, not the old
+  paths, and remember the experiment/observation endpoints require
+  `fromStartTime`. The SDK is `langfuse>=5,<6`; it stores run-level scores
+  (`certification_result`, `avg_*`) on the **experiment** itself. Experiment
+  metadata comes back flattened and stringified (`"gate_thresholds.groundedness":
+  "0.8"`) — read it through `cert_common.normalize_run_metadata` /
+  `recorded_gate`. Runs recorded by SDK 3.x return `{}` metadata, so the portal
+  shows their status but no bar (`—`).
+
 - **`.env` loading.** Every script loads `.env` with `override=True` (the file
   wins over shell vars). A fresh `cp .env.example .env` is a plain file; if you
   adopt the optional dual-profile setup, `bash scripts/use_env.sh {status|cloud|local|both}`
@@ -156,6 +169,7 @@ Use these to answer "did the gate run actually land?" — e.g. after `make gate`
 
 1. `make preflight` → `RESULT: READY`.
 2. `make gate` → a `PASS` or `FAIL` verdict, and a run under
-   **Langfuse → Datasets → `certification/financebench-sample` → Runs**.
+   **Langfuse → Experiments** (filter by dataset `certification/financebench-sample`);
+   the runner prints the experiment URL.
 3. `make portal` → <http://localhost:8050> shows the gate matrix with your run as a row.
 4. `make test` → the offline suite passes (no credentials needed; good for a sanity check any time).

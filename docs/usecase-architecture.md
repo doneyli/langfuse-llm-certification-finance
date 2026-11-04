@@ -53,7 +53,7 @@ are now merged to `main`.
         │   run:   avg_<dim> × N  +  usecase_certification_gate          │
         │            └─▶ certification_result = PASS iff ALL dims clear   │
         └────────────┬─────────────────────────────────────────────────┘
-                     │ persist_run_evaluations (scores) ; queue_failed_items
+                     │ SDK stores run scores on the experiment ; queue_failed_items
                      ▼
    ┌──────────────────────────┐     ┌───────────────────────────────────────┐
    │  Portal (FastAPI + React)│     │  Langfuse UI                          │
@@ -110,7 +110,7 @@ file that owns it, and its status in this workstream.
 | 2 | **Prompt management** | Prompts (versioned, `production` label) | `setup_prompts.py` (templates) + `cert_common.get_managed_prompt` (fetch) | ✅ templates registered; agents consume in #9–#11 |
 | 3 | **Agent execution & tracing** | Observations: `generation` / `span` / `tool` | `agents/base.py` (`traced_generation/span/tool`) + each agent | ✅ wired; span-nesting inside `run_experiment` **verified** (spike + live runs); all three agents implemented — #9 (PR #13), #10 (PR #14), #11 (PR #15) |
 | 4 | **Item scoring** | Scores + Score Configs | `evaluators.py` + `setup_score_configs.py` | ✅ wired (incl. new `tool_use_correctness`) |
-| 5 | **Run-level gate** | Score `certification_result` | `evaluators.usecase_certification_gate` + `cert_common.persist_run_evaluations` | ✅ wired (multi-dimensional, all-must-pass) |
+| 5 | **Run-level gate** | Score `certification_result` | `evaluators.usecase_certification_gate` (stored on the experiment by the SDK) | ✅ wired (multi-dimensional, all-must-pass) |
 | 6 | **Human review** | Annotation Queues | `setup_annotation_queues.py` + `cert_common.queue_failed_items` | ✅ wired (reused) |
 | 7 | **Reporting / status** | Portal + export | Portal (`metadata.model="usecase:<name>"`) + `export_results.py` | ✅ free dashboard row; the portal reads `metadata.gate_thresholds` so agent rows show the per-dimension bars the gate enforced, not a single number |
 | 8 | **Production monitoring** | Online evaluation / live traces | `monitor_production.py` + UI LLM-as-judge | ✅ reused; applies to deployed agents |

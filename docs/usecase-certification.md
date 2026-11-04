@@ -71,7 +71,7 @@ a step doesn't change behavior or emit a meaningful span, it isn't a step.
 └───────────────┘   └────────────────────┘   └────────────────────┘
 ```
 
-**Python package dependencies:** none new. `langfuse>=3.0,<4.0`, `anthropic>=0.39`,
+**Python package dependencies:** none new. `langfuse>=5,<6`, `anthropic>=0.39`,
 and `openai>=1.0` are already in `pyproject.toml`. The calculator tool uses only
 the standard library (`ast` for safe arithmetic).
 
@@ -161,7 +161,7 @@ def traced_tool(name: str):
     return get_client().start_as_current_observation(as_type="tool", name=name)
 ```
 
-> **Verified against v3 docs:** inside a `run_experiment` task there is already an
+> **Verified against SDK v5 / Langfuse v4** (`scripts/spike_span_nesting.py`): inside a `run_experiment` task there is already an
 > active trace per item; observations opened with `start_as_current_observation`
 > nest under it automatically. OpenAI-compatible models can alternatively route
 > through `langfuse.openai` (auto-traced) — keep `traced_generation` for the native
@@ -262,11 +262,11 @@ Behavior:
 3. Run evaluators: `[average_score_evaluator(d) for d in gate dims] + [uc["gate"]]`.
 4. `metadata={"model": f"usecase:{args.use_case}", "base_model": args.model, ...}`
    so the **portal renders it as a dashboard row with no portal change**.
-5. Persist run-level scores via REST exactly as `run_certification.py` already does
-   (copy the `result.run_evaluations` → `POST /api/public/scores` block).
+5. Run-level scores need no extra write: the SDK stores every `run_evaluators`
+   result on the experiment itself (read back via `GET /api/public/experiments?fields=scores`).
 6. `--ci`: exit 1 if `certification_result != 1.0`.
 
-> **Reuse, don't fork:** import `select_evaluators` helpers, the score-persist block,
+> **Reuse, don't fork:** import `select_evaluators` helpers
 > and `_queue_failed_items` from a shared module or refactor the reusable parts of
 > `run_certification.py` into a small `cert_common.py`. Avoid copy-paste drift.
 
@@ -606,7 +606,7 @@ uv run python run_usecase_certification.py --use-case sentiment-triage \
 uv run python run_usecase_certification.py --use-case advisory-draft \
     --dataset certification/advisory-adversarial --model claude-sonnet-4-6
 
-# Inspect: Langfuse UI → Datasets → run → open item → see nested span tree
+# Inspect: Langfuse UI → Experiments → run → open item → see nested span tree
 # Dashboard: three usecase:* rows, each PASS/FAIL via the multi-dim gate
 ```
 

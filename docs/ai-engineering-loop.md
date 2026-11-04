@@ -121,15 +121,18 @@ traffic (not the eval set): it fetches recent traces, runs the deterministic
 `regulatory_compliance` and `completeness` evaluators on any unscored trace, posts
 the scores back, and **exits non-zero on a compliance violation** so it wires into
 alerting. For subjective drift (groundedness, helpfulness) you add a Langfuse
-**LLM-as-a-Judge** evaluator on Live Observations directly in the UI, sampled to
-manage cost. Human sign-off happens through the **Certification Review**
+**LLM-as-a-Judge** evaluator at the observation level: the evaluator defines how
+to score, and an evaluation **rule** selects what to score — root observations
+(`isRootObservation = true`) of production traffic, sampled to manage cost.
+(Trace-level evaluators on "Live Observations" stopped producing results at the
+Langfuse Cloud v4 cutover on 2026-11-16.) Human sign-off happens through the **Certification Review**
 annotation queue, fed from either side: the offline certification runner
 (`--queue-failures`) and now live monitoring too
 (`monitor_production.py --queue-violations` → `cert_common.queue_trace_ids`). From
 there a reviewed trace can be promoted into the golden dataset — the feedback edge
 that closes the loop ([Edge A](#closing-the-loop-what-is-wired-vs-open)).
 
-**Langfuse primitive:** Scores on production traces + online LLM-as-a-judge +
+**Langfuse primitive:** Scores on production traces + observation-level LLM-as-a-judge (evaluator + rule) +
 annotation queues. **See it:** UI → **Tracing**/**Scores**, and **Annotation
 Queues → Certification Review**.
 

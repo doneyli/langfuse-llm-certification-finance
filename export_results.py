@@ -16,8 +16,10 @@ Environment variables:
     LANGFUSE_SECRET_KEY  (required)
     LANGFUSE_BASE_URL    (default: https://cloud.langfuse.com)
 
+Reads the Langfuse v4 API only (GET /experiments, GET /experiment-items).
+
 Prerequisites:
-    pip install 'langfuse>=3.0,<4.0'
+    pip install 'langfuse>=5,<6'
 """
 
 import argparse
@@ -27,17 +29,18 @@ import json
 import os
 import sys
 import urllib.parse
-import urllib.request
 from datetime import datetime
 
-try:
-    from langfuse import Langfuse
-except ImportError:
-    print("Error: langfuse package not installed. Run: pip install 'langfuse>=3.0,<4.0'",
-          file=sys.stderr)
-    sys.exit(1)
-
-from cert_common import describe_gate, langfuse_creds, recorded_gate
+from cert_common import (
+    api_get,
+    describe_gate,
+    lookback_from_env,
+    normalize_run_metadata,
+    paginate_cursor,
+    parse_json_field,
+    recorded_gate,
+    score_value,
+)
 
 
 # --------------- CLI ---------------
@@ -60,117 +63,86 @@ def parse_args():
 
 # --------------- Data Collection ---------------
 
-# Langfuse REST API enforces max limit=100 per page; cap pages as a circuit
-# breaker (same convention as portal/langfuse_client.py).
-PAGE_SIZE = 100
-MAX_PAGES = 100
+RUN_LEVEL_SCORES = {"certification_result"}
 
 
-def _api_get(host, auth, path):
-    req = urllib.request.Request(
-        f"{host}{path}",
-        headers={"Authorization": f"Basic {auth}"},
-    )
-    return json.loads(urllib.request.urlopen(req).read())
+def _dataset_id(dataset_name):
+    encoded = urllib.parse.quote(dataset_name, safe="")
+    return api_get(f"/api/public/v2/datasets/{encoded}").get("id")
 
 
-def _paginate(host, auth, path):
-    """Fetch all pages of a Langfuse list endpoint; returns concatenated data."""
-    sep = "&" if "?" in path else "?"
-    out = []
-    page = 1
-    while page <= MAX_PAGES:
-        resp = _api_get(host, auth, f"{path}{sep}limit={PAGE_SIZE}&page={page}")
-        batch = resp.get("data", []) or []
-        out.extend(batch)
-        meta = resp.get("meta") or {}
-        total_pages = meta.get("totalPages")
-        if total_pages is None:
-            if len(batch) < PAGE_SIZE:
-                break
-        elif page >= total_pages:
-            break
-        page += 1
-    return out
+def collect_run_data(dataset_name, run_name=None):
+    """Collect one gate run (experiment) from the Langfuse v4 read API.
 
-
-def collect_run_data(client, dataset_name, run_name=None):
-    """Collect experiment run data from Langfuse.
-
-    Runs, run items, and trace scores come from the REST API (the v3 SDK's
-    DatasetClient does not expose runs); dataset items come from the SDK.
-    Returns a dict with run metadata and per-item scores.
+    The run and its run-level scores (``certification_result``, ``avg_*``) come
+    from ``GET /experiments``; per-item input, expected output and scores from
+    ``GET /experiment-items``. Returns a dict with run metadata, run-level
+    scores, per-item scores and aggregates.
     """
     try:
-        dataset = client.get_dataset(dataset_name)
+        dataset_id = _dataset_id(dataset_name)
     except Exception as e:
         print(f"Error: could not fetch dataset '{dataset_name}': {e}", file=sys.stderr)
         sys.exit(1)
-    host, auth = langfuse_creds()
 
-    # Find the target run
-    encoded_ds = urllib.parse.quote(dataset_name, safe="")
-    runs = _paginate(host, auth, f"/api/public/datasets/{encoded_ds}/runs")
+    params = {"datasetId": dataset_id, "fromStartTime": lookback_from_env(),
+              "fields": "core,metadata,scores"}
+    if run_name:
+        params["name"] = run_name
+    runs = paginate_cursor("/api/public/experiments", params)
+    if run_name:
+        runs = [r for r in runs if r.get("name") == run_name]
+        if not runs:
+            print(f"Error: run '{run_name}' not found on dataset '{dataset_name}'",
+                  file=sys.stderr)
+            sys.exit(1)
+    else:
+        # "Latest run" never means a disposable spike (scripts/spike_span_nesting.py).
+        runs = [r for r in runs if not (r.get("name") or "").startswith("spike-")]
     if not runs:
         print(f"Error: no runs found for dataset '{dataset_name}'", file=sys.stderr)
         sys.exit(1)
-
-    if run_name:
-        target_runs = [r for r in runs if r.get("name") == run_name]
-        if not target_runs:
-            available = [r.get("name") for r in runs]
-            print(f"Error: run '{run_name}' not found. Available: {available}", file=sys.stderr)
-            sys.exit(1)
-        run = target_runs[0]
-    else:
-        # Use the most recent run
-        run = max(runs, key=lambda r: r.get("createdAt", ""))
+    run = max(runs, key=lambda r: r.get("startTime", ""))
 
     print(f"  Exporting run: {run['name']}", file=sys.stderr)
 
-    # Collect scores from run items
-    encoded_run = urllib.parse.quote(run["name"])
-    run_items = _paginate(
-        host, auth,
-        f"/api/public/dataset-run-items?datasetId={dataset.id}&runName={encoded_run}",
-    )
-    ds_items = {item.id: item for item in dataset.items}
+    run_scores = {}
+    for s in run.get("scores") or []:
+        if s.get("name"):
+            run_scores[s["name"]] = {"value": score_value(s),
+                                     "comment": s.get("comment") or ""}
+
+    run_items = paginate_cursor("/api/public/experiment-items", {
+        "experimentId": run["id"], "fromStartTime": lookback_from_env(),
+        "fields": "core,io,scores,itemMetadata",
+    })
 
     items_data = []
     score_totals = {}  # {score_name: [values]}
-
     for run_item in run_items:
-        trace_id = run_item.get("traceId", "")
-
-        # Get scores embedded in this item's trace
         item_scores = {}
-        try:
-            trace = _api_get(host, auth, f"/api/public/traces/{trace_id}")
-            for score in trace.get("scores", []) or []:
-                sname = score.get("name")
-                if not sname:
-                    continue
-                item_scores[sname] = {
-                    "value": score.get("value"),
-                    "comment": score.get("comment", "") or "",
-                }
-                if sname not in score_totals:
-                    score_totals[sname] = []
-                if score.get("value") is not None:
-                    score_totals[sname].append(score["value"])
-        except Exception as e:
-            print(f"    Warning: could not fetch trace {trace_id}: {e}", file=sys.stderr)
+        for score in run_item.get("scores") or []:
+            sname = score.get("name")
+            # Run-level scores belong to the experiment; skip any copy a
+            # pre-v5 runner also wrote onto an item trace.
+            if not sname or sname in RUN_LEVEL_SCORES or sname.startswith("avg_"):
+                continue
+            value = score_value(score)
+            item_scores[sname] = {"value": value,
+                                  "comment": score.get("comment") or ""}
+            score_totals.setdefault(sname, [])
+            if value is not None:
+                score_totals[sname].append(value)
 
-        # Get the dataset item input/expected for context
-        dataset_item = ds_items.get(run_item.get("datasetItemId", ""))
+        inp = parse_json_field(run_item.get("input"))
+        expected = parse_json_field(run_item.get("expectedOutput"))
         items_data.append({
-            "trace_id": trace_id,
-            "input": dataset_item.input if dataset_item else {},
-            "expected_output": dataset_item.expected_output if dataset_item else {},
+            "trace_id": run_item.get("traceId", ""),
+            "input": inp if isinstance(inp, dict) else {"text": str(inp or "")},
+            "expected_output": expected if isinstance(expected, dict) else {},
             "scores": item_scores,
         })
 
-    # Compute aggregates
     aggregates = {}
     for name, values in score_totals.items():
         if values:
@@ -185,7 +157,9 @@ def collect_run_data(client, dataset_name, run_name=None):
     return {
         "dataset": dataset_name,
         "run_name": run["name"],
-        "run_metadata": run.get("metadata") or {},
+        "experiment_id": run.get("id"),
+        "run_metadata": normalize_run_metadata(run.get("metadata")),
+        "run_scores": run_scores,
         "exported_at": datetime.now().isoformat(),
         "total_items": len(items_data),
         "aggregates": aggregates,
@@ -203,10 +177,10 @@ def format_markdown(data: dict) -> str:
     # rather than being reported against a bar nothing enforced.
     gate = recorded_gate(data["run_metadata"], data["aggregates"])
 
-    # Determine pass/fail from certification_result if available
-    cert = data["aggregates"].get("certification_result", {})
-    if cert:
-        status = "PASSED" if cert.get("mean", 0) >= 0.5 else "FAILED"
+    # Pass/fail is the run's own certification_result score (on the experiment).
+    cert = (data.get("run_scores") or {}).get("certification_result") or {}
+    if cert.get("value") is not None:
+        status = "PASSED" if cert["value"] >= 0.5 else "FAILED"
     else:
         status = "REVIEW REQUIRED"
 
@@ -218,6 +192,7 @@ def format_markdown(data: dict) -> str:
         f"| **Model** | {model} |",
         f"| **Dataset** | {data['dataset']} |",
         f"| **Run** | {data['run_name']} |",
+        f"| **Experiment ID** | {data.get('experiment_id') or '—'} |",
         f"| **Date** | {data['exported_at'][:10]} |",
         f"| **Items Evaluated** | {data['total_items']} |",
         f"| **Gate** | {describe_gate(gate)} |",
@@ -234,6 +209,19 @@ def format_markdown(data: dict) -> str:
             f"| {name} | {agg['mean']:.3f} | {agg['min']:.3f} | "
             f"{agg['max']:.3f} | {agg['count']} | {agg['pass_rate']:.0%} |"
         )
+
+    run_scores = data.get("run_scores") or {}
+    if run_scores:
+        lines.extend([
+            f"",
+            f"## Run-Level Scores",
+            f"",
+            f"| Score | Value | Comment |",
+            f"|-------|-------|---------|",
+        ])
+        for name, sdata in sorted(run_scores.items()):
+            val = f"{sdata['value']:.3f}" if sdata["value"] is not None else "N/A"
+            lines.append(f"| {name} | {val} | {str(sdata.get('comment', ''))[:120]} |")
 
     lines.extend([
         f"",
@@ -326,7 +314,6 @@ def main():
     except ImportError:
         pass
 
-    host = os.getenv("LANGFUSE_BASE_URL", os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"))
     pk = os.getenv("LANGFUSE_PUBLIC_KEY")
     sk = os.getenv("LANGFUSE_SECRET_KEY")
 
@@ -334,15 +321,13 @@ def main():
         print("Error: LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY required", file=sys.stderr)
         sys.exit(1)
 
-    client = Langfuse(public_key=pk, secret_key=sk, host=host)
-
     print("Langfuse Results Exporter", file=sys.stderr)
     print("=" * 50, file=sys.stderr)
     print(f"  Dataset: {args.dataset}", file=sys.stderr)
     print(f"  Format:  {args.format}", file=sys.stderr)
 
     # Collect data
-    data = collect_run_data(client, args.dataset, args.run_name)
+    data = collect_run_data(args.dataset, args.run_name)
 
     # Format output
     formatters = {

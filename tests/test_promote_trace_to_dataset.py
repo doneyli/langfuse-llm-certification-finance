@@ -71,3 +71,30 @@ class TestQueueTraceIdsGuard:
         from cert_common import queue_trace_ids
         assert queue_trace_ids([]) == 0
         assert queue_trace_ids(["", None]) == 0
+
+
+class TestTraceFromObservations:
+    """v4 reads a trace as its observations; the root row carries the trace IO."""
+
+    def test_root_row_supplies_decoded_input(self):
+        rows = [
+            {"id": "c", "parentObservationId": "r", "startTime": "2026-11-01T00:00:01Z",
+             "input": '{"q": "child"}'},
+            {"id": "r", "parentObservationId": None, "startTime": "2026-11-01T00:00:00Z",
+             "traceName": "advisory", "input": '{"question": "What was FY19 revenue?"}',
+             "output": '{"answer": "wrong"}'},
+        ]
+        trace = promote.trace_from_observations("t1", rows)
+        assert trace == {"id": "t1", "name": "advisory",
+                         "input": {"question": "What was FY19 revenue?"},
+                         "output": {"answer": "wrong"}}
+        item = promote.build_dataset_item(trace)
+        assert item["input"] == {"question": "What was FY19 revenue?"}
+        assert item["expected_output"] == {"answer": ""}
+
+    def test_plain_string_input_is_kept(self):
+        rows = [{"id": "r", "parentObservationId": None, "input": "hello"}]
+        assert promote.trace_from_observations("t1", rows)["input"] == "hello"
+
+    def test_no_rows_is_none(self):
+        assert promote.trace_from_observations("t1", []) is None

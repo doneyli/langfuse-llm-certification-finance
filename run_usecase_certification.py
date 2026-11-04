@@ -46,13 +46,13 @@ os.environ.setdefault("LANGFUSE_FLUSH_INTERVAL", "2")
 try:
     from langfuse import get_client
 except ImportError:
-    print("Error: langfuse package not installed. Run: pip install 'langfuse>=3.0,<4.0'",
+    print("Error: langfuse package not installed. Run: pip install 'langfuse>=5,<6'",
           file=sys.stderr)
     sys.exit(1)
 
 from agents import AGENT_REGISTRY
 from evaluators import average_score_evaluator, usecase_certification_gate
-from cert_common import persist_run_evaluations, queue_failed_items
+from cert_common import queue_failed_items
 
 # All three agents ship registered. The list stays separate from AGENT_REGISTRY
 # because the agents package tolerates a *missing* agent module file
@@ -235,9 +235,6 @@ def main():
     print("Results:", file=sys.stderr)
     print(result.format(), file=sys.stderr)
 
-    # Persist run-level scores (incl. certification_result) to Langfuse.
-    persist_run_evaluations(result)
-
     # Certification summary
     print("\n" + "=" * 50, file=sys.stderr)
     print("USE-CASE CERTIFICATION SUMMARY", file=sys.stderr)
@@ -261,7 +258,10 @@ def main():
         if ev.name.startswith("avg_"):
             print(f"  {ev.name}: {ev.comment}", file=sys.stderr)
 
-    print(f"\nView details in Langfuse UI > Datasets > {args.dataset} > Runs",
+    # Run-level scores (certification_result, avg_*) are stored on the
+    # experiment by the SDK itself.
+    print(f"\nView in Langfuse (Experiments): "
+          f"{getattr(result, 'experiment_url', None) or args.dataset}",
           file=sys.stderr)
 
     if args.queue_failures and result.item_results:

@@ -96,13 +96,44 @@ def parse_args(argv=None):
     return ap.parse_args(argv)
 
 
-def _fetch_trace(host, auth, trace_id):
-    import json
-    import urllib.request
-    req = urllib.request.Request(
-        f"{host}/api/public/traces/{trace_id}",
-        headers={"Authorization": f"Basic {auth}"})
-    return json.loads(urllib.request.urlopen(req).read())
+def trace_from_observations(trace_id: str, rows: list[dict]) -> dict | None:
+    """Rebuild the trace view build_dataset_item needs from v4 observation rows.
+
+    In Langfuse v4 a trace's input/output are its root observation's
+    (``parentObservationId`` is null). IO comes back as raw strings, so JSON is
+    decoded. Returns None when the trace has no observations (yet).
+    """
+    from cert_common import parse_json_field
+    if not rows:
+        return None
+    roots = [r for r in rows if not r.get("parentObservationId")] or rows
+    root = min(roots, key=lambda r: r.get("startTime") or "")
+    return {
+        "id": trace_id,
+        "name": root.get("traceName") or root.get("name"),
+        "input": parse_json_field(root.get("input")),
+        "output": parse_json_field(root.get("output")),
+    }
+
+
+def _fetch_trace(trace_id, *, lookback_days=None):
+    """Fetch a trace's root observation via GET /v2/observations?traceId=.
+
+    The legacy GET /traces/{id} was removed on Langfuse Cloud on 2026-11-16.
+    /v2/observations needs a lower time bound; PORTAL_LOOKBACK_DAYS (default
+    730) covers any trace a reviewer would promote.
+    """
+    from cert_common import iso_utc, lookback_from_env, paginate_cursor
+    rows = paginate_cursor("/api/public/v2/observations", {
+        "traceId": trace_id,
+        "fromStartTime": (iso_utc(days_ago=lookback_days) if lookback_days
+                          else lookback_from_env()),
+        "fields": "core,basic,io,trace_context",
+    })
+    trace = trace_from_observations(trace_id, rows)
+    if trace is None:
+        raise LookupError(f"no observations found for trace {trace_id}")
+    return trace
 
 
 def main(argv=None) -> int:
@@ -114,7 +145,7 @@ def main(argv=None) -> int:
     except ImportError:
         pass
 
-    from cert_common import fetch_review_queue_trace_ids, langfuse_creds
+    from cert_common import fetch_review_queue_trace_ids
 
     trace_ids = resolve_trace_ids(args, from_queue_fn=fetch_review_queue_trace_ids)
     if not trace_ids:
@@ -122,7 +153,6 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 1
 
-    host, auth = langfuse_creds()
     print(f"Promoting {len(trace_ids)} trace(s) -> dataset '{args.dataset}'",
           file=sys.stderr)
     if args.expected is None:
@@ -136,7 +166,7 @@ def main(argv=None) -> int:
     promoted = 0
     for tid in trace_ids:
         try:
-            trace = _fetch_trace(host, auth, tid)
+            trace = _fetch_trace(tid)
         except Exception as e:
             print(f"  Warning: could not fetch trace {tid[:12]}...: {e}", file=sys.stderr)
             continue
