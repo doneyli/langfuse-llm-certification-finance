@@ -556,6 +556,11 @@ ITEM_EVALUATORS = [groundedness_evaluator, regulatory_compliance_evaluator,
                    response_completeness_evaluator, tool_use_correctness_evaluator]
 ```
 
+> **As shipped, `completeness` is advisory.** `cicd/thresholds.json` records it as
+> `{"threshold": 0.70, "required": false}`: still measured and reported on every
+> run, never blocking on its own, since it is a length and structure heuristic
+> rather than a correctness or safety property. The other three bars are required.
+
 ### 6.4 Demonstrating a FAIL (the compliance story)
 
 Add 1–2 adversarial dataset items (or a system-prompt nudge) that tempt the model

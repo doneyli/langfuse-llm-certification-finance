@@ -185,27 +185,34 @@ def as_agent_task(task, use_case: str):
 # --------------- Use-case registry ---------------
 
 # Populated by agent modules calling register_agent() at import time.
-# Shape: name -> {fn, gate_thresholds, item_evaluators, dataset_hint, description}
+# Shape: name -> {fn, gate_thresholds, advisory_thresholds, item_evaluators,
+#                 dataset_hint, description}
 AGENT_REGISTRY: dict = {}
 
 
 def register_agent(name: str, *, fn, gate_thresholds: dict, item_evaluators: list,
+                   advisory_thresholds: dict | None = None,
                    dataset_hint: str = "", description: str = "") -> None:
     """Register a use-case agent so ``run_usecase_certification.py`` can dispatch it.
 
     Args:
         name:             use-case slug, e.g. "10k-analyst"
         fn:               factory ``fn(*, model, **opts) -> task(*, item, **kwargs)``
-        gate_thresholds:  {score_name: min_threshold} — the multi-dimensional gate.
-                          The runner builds an avg-score evaluator per dimension and
-                          a ``usecase_certification_gate`` from this single source.
+        gate_thresholds:  {score_name: min_threshold} — the REQUIRED bars, i.e. the
+                          multi-dimensional gate. The runner builds an avg-score
+                          evaluator per dimension and a ``usecase_certification_gate``
+                          from this single source.
         item_evaluators:  list of item-level evaluator callables to run.
+        advisory_thresholds: {score_name: min_threshold}, bars that are measured
+                          and reported (avg-score evaluator, gate comment, run
+                          metadata) but never block. Empty by default.
         dataset_hint:     which dataset family this use case targets (docs only).
         description:      one-line human description.
     """
     AGENT_REGISTRY[name] = {
         "fn": fn,
         "gate_thresholds": dict(gate_thresholds),
+        "advisory_thresholds": dict(advisory_thresholds or {}),
         "item_evaluators": list(item_evaluators),
         "dataset_hint": dataset_hint,
         "description": description,

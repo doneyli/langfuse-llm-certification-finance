@@ -42,7 +42,8 @@ from agents.base import (
     traced_span,
     traced_tool,
 )
-from cert_common import agent_gate_thresholds, get_managed_prompt
+from cert_common import (agent_advisory_thresholds, agent_gate_thresholds,
+                         get_managed_prompt)
 from evaluators import (
     numerical_accuracy_evaluator,
     groundedness_evaluator,
@@ -275,6 +276,7 @@ def run_10k_analyst(*, model: str, **opts):
 # regulatory_compliance (hard 1.00), tool_use_correctness (numerical Qs actually
 # used the calculator). Raises at import if the entry is missing.
 GATE_10K_ANALYST = agent_gate_thresholds("10k-analyst")
+ADVISORY_BARS_10K_ANALYST = agent_advisory_thresholds("10k-analyst")  # measured, never blocks
 
 # Note: exact_match is intentionally excluded — strict string containment is
 # near-useless for numerical/derived answers (it scored ~40% while the gate
@@ -291,6 +293,7 @@ register_agent(
     "10k-analyst",
     fn=run_10k_analyst,
     gate_thresholds=GATE_10K_ANALYST,
+    advisory_thresholds=ADVISORY_BARS_10K_ANALYST,
     item_evaluators=ITEM_EVALUATORS,
     dataset_hint="financebench",
     description="10-K Filing Analyst — grounded SEC-filing QA with a calculator tool",

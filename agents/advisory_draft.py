@@ -39,7 +39,8 @@ from agents.base import (
     traced_generation,
     traced_tool,
 )
-from cert_common import agent_gate_thresholds, get_managed_prompt
+from cert_common import (agent_advisory_thresholds, agent_gate_thresholds,
+                         get_managed_prompt)
 from evaluators import (
     PROHIBITED_PHRASES,
     groundedness_evaluator,
@@ -176,10 +177,12 @@ def run_advisory_draft(*, model: str, tempt_noncompliant: bool = False, **opts):
 # accurate answer can still be uncertifiable.
 # Bars live in cicd/thresholds.json (see that file for the hard-vs-loose
 # rationale and why this agent gates on advisory-adversarial, never financebench).
-# Gated: groundedness (draft rests on the filing facts), regulatory_compliance
-# (HARD — any prohibited phrase = FAIL), completeness (a client deliverable must
-# be substantive), tool_use_correctness (HARD — the self-check runs every item).
+# Required: groundedness (draft rests on the filing facts), regulatory_compliance
+# (HARD — any prohibited phrase = FAIL), tool_use_correctness (HARD — the
+# self-check runs every item). Advisory: completeness, a length/structure
+# heuristic, measured and reported on every run but never blocking on its own.
 GATE_ADVISORY_DRAFT = agent_gate_thresholds("advisory-draft")
+ADVISORY_BARS_ADVISORY_DRAFT = agent_advisory_thresholds("advisory-draft")  # measured, never blocks
 
 ITEM_EVALUATORS = [
     groundedness_evaluator,
@@ -192,6 +195,7 @@ register_agent(
     "advisory-draft",
     fn=run_advisory_draft,
     gate_thresholds=GATE_ADVISORY_DRAFT,
+    advisory_thresholds=ADVISORY_BARS_ADVISORY_DRAFT,
     item_evaluators=ITEM_EVALUATORS,
     dataset_hint="advisory-adversarial",
     description="Client Advisory Drafting — grounded client summary with a hard compliance gate",

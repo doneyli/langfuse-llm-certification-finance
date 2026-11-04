@@ -11,9 +11,9 @@ dashboard.
 
 | Consumer | Reads |
 |---|---|
-| [`agents/financial_analyst.py`](../agents/financial_analyst.py), [`sentiment_triage.py`](../agents/sentiment_triage.py), [`advisory_draft.py`](../agents/advisory_draft.py) | `agent_gates.<agent>` at import, via `cert_common.agent_gate_thresholds()`. `run_usecase_certification.py` turns each entry into one average-score evaluator plus a `usecase_certification_gate`. |
+| [`agents/financial_analyst.py`](../agents/financial_analyst.py), [`sentiment_triage.py`](../agents/sentiment_triage.py), [`advisory_draft.py`](../agents/advisory_draft.py) | `agent_gates.<agent>` at import, via `cert_common.agent_gate_thresholds()` (required bars) and `cert_common.agent_advisory_thresholds()` (advisory bars). `run_usecase_certification.py` turns each bar into one average-score evaluator, plus one `usecase_certification_gate` over all of them. |
 | [`run_certification.py`](../run_certification.py) | `model_gate.default_threshold` as the `--threshold` default. |
-| [`tests/test_gate_thresholds.py`](../tests/test_gate_thresholds.py) | Everything — it fails if the file and the agent registry diverge, if a gated dimension has no evaluator producing it, or if an entry goes missing. |
+| [`tests/test_gate_thresholds.py`](../tests/test_gate_thresholds.py) | Everything — it fails if the file and the agent registry diverge, if a gated dimension has no evaluator producing it, if an entry goes missing or has no required bar, or if an advisory bar can change a verdict. |
 
 Run the gate locally exactly as CI runs it:
 
@@ -21,14 +21,57 @@ Run the gate locally exactly as CI runs it:
 make ci-gate USE_CASE=advisory-draft
 ```
 
+## Required bars and advisory bars
+
+Each bar in `agent_gates.<agent>` is one of two kinds:
+
+```json
+"advisory-draft": {
+  "groundedness": 0.80,
+  "regulatory_compliance": 1.00,
+  "completeness": {"threshold": 0.70, "required": false},
+  "tool_use_correctness": 1.00
+}
+```
+
+- **Required** (a bare number, or `{"threshold": x}` / `{"threshold": x, "required": true}`).
+  The verdict is `all()` over these: one required bar below its threshold fails
+  the run, and `--ci` exits 1.
+- **Advisory** (`{"threshold": x, "required": false}`). Measured exactly like a
+  required bar (an `avg_<dim>` score on the experiment), reported as `MET` or
+  `MISS` in the `certification_result` comment and in the runner summary, and
+  recorded in the experiment's metadata. It never changes the verdict or the
+  exit code.
+
+A file with only bare numbers means what it always meant: every bar required.
+
+In run metadata the two tiers live under separate keys: required bars under
+`gate_thresholds`, advisory bars under `advisory_thresholds`. That split is
+load-bearing. The portal and the evidence pack replay an older run's verdict as
+`all()` over `gate_thresholds` (`cert_common.recorded_gate`), so an advisory bar
+recorded there would fail a run the gate passed.
+
+Use advisory for a signal worth watching on every run that should not block a
+release on its own: a heuristic, or a new evaluator still being calibrated.
+`advisory-draft`'s `completeness` is the example here, since it is a length and
+structure heuristic rather than a correctness or safety property. Moving a bar
+from required to advisory loosens the gate, so review that diff the way you
+would review deleting the bar.
+
+A malformed entry (an unknown key such as a misspelled `"requried"`, a missing
+`threshold`, a non-boolean `required`) raises at import rather than being
+guessed at.
+
 ## Why a missing entry is fatal
 
-`usecase_certification_gate` is `all()` over the dimensions it is handed, and
-`all()` over an empty dict is `True`. An agent registered with no thresholds
-would therefore report **PASSED unconditionally** — so
-`cert_common.agent_gate_thresholds()` raises at import rather than defaulting.
-Deleting a bar to quiet a failing dimension is how a gate silently stops being
-one; `tests/test_gate_thresholds.py` pins that behaviour down.
+`usecase_certification_gate` is `all()` over the required dimensions it is
+handed, and `all()` over an empty dict is `True`. An agent registered with no
+required thresholds would therefore report **PASSED unconditionally**, whatever
+its advisory bars say. So `cert_common.agent_gate_thresholds()` raises at import
+on a missing or empty entry, and on an entry whose bars are all advisory, rather
+than defaulting. Deleting a bar to quiet a failing dimension is how a gate
+silently stops being one; `tests/test_gate_thresholds.py` pins that behaviour
+down.
 
 ## Hard bars vs loose bars
 
@@ -41,10 +84,24 @@ carries run-to-run noise and a tight judge bar buys flaky gates.
 ## The verdict is a boolean score
 
 Each run's verdict is written to Langfuse as the run-level score
-`certification_result`, a **BOOLEAN** (`true` = every bar in this file cleared,
-`false` = at least one did not), stored on the experiment with a per-dimension
-breakdown in its comment. The bars themselves are recorded in the experiment's
-metadata, so a historical run reports the bar it was judged by.
+`certification_result`, a **BOOLEAN** (`true` = every required bar in this file
+cleared, `false` = at least one did not), stored on the experiment with a
+per-dimension breakdown in its comment (required bars as `PASS`/`FAIL`, then
+advisory bars as `MET`/`MISS`). The bars themselves are recorded in the
+experiment's metadata, so a historical run reports the bar it was judged by.
+
+The Langfuse SDK writes every run-level score (`certification_result` and each
+`avg_<dim>`) itself, with `datasetRunId` set to the experiment id and no
+`traceId`. That is what makes them experiment scores: they come back from
+`GET /api/public/experiments?fields=scores` and from
+`GET /api/public/v3/scores?experimentId=<experiment id>`, because the
+`experimentId` filter matches a score's dataset run id. A pipeline step waiting
+on the verdict can poll either. Do not re-post run-level scores yourself with a
+`traceId`: that stores a second copy as an item score on whichever trace you
+picked, which `experimentId` filtering cannot see. This repo did exactly that
+until the SDK v5 cutover (`cert_common.persist_run_evaluations`, removed). It
+was a duplicate even on SDK 3.14, which already wrote run-level scores to the
+dataset run.
 
 The file also records what **no** bar here covers — persona and tone are not
 gated, so a regression in how an answer *reads* cannot fail these gates — and
