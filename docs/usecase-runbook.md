@@ -11,10 +11,10 @@ and the script for demoing it. Pairs with
 > (`usecase_certification_gate`, `certification_result`, the `certification/`
 > dataset prefix). Nothing here is a regulatory certification.
 
-> **Status:** the shared foundation **and** all three agents (10k-analyst #9,
-> sentiment-triage #10, advisory-draft #11) are on `main` and verified together —
-> `run_usecase_certification.py --list` shows all three `[registered]` and the 52
-> offline unit tests pass. Every step below works today.
+> **Status (2026-11-04):** all three agents (10k-analyst, sentiment-triage,
+> advisory-draft) are on `main`, running on the Langfuse Python SDK v5 against
+> Langfuse v4. `make test` passes 201 offline tests. Every step below was
+> re-run on the Cloud US demo project this date unless it says otherwise.
 
 ---
 
@@ -41,11 +41,15 @@ uv run python setup_datasets.py --dataset fpb --sample
 #   registers financial-qa/-sentiment AND the use-case agent templates
 uv run python setup_prompts.py
 
-# Stage 4 — Score configs (incl. tool_use_correctness)   [now]
+# Stage 4 — Score configs (pass/fail scores are BOOLEAN)  [now]
 uv run python setup_score_configs.py
 
 # Stage 6 — Human review (Annotation Queues)             [now]
 uv run python setup_annotation_queues.py
+
+# Optional — production monitoring inside Langfuse, and the gate dashboard
+uv run python setup_evaluators.py     # managed evaluators + rules (rules created disabled)
+uv run python setup_dashboards.py     # "Deployment gate — quality & cost"
 ```
 
 **Verify in the Langfuse UI:**
@@ -99,9 +103,10 @@ This performs the run:
 
 | What | Where |
 |---|---|
-| Nested agent trace (the showcase) | Langfuse UI → **Experiments** → the run (URL printed by the runner) → open an item → span tree |
+| Nested agent trace (the showcase) | Langfuse UI → **Experiments** → the run (URL printed by the runner) → open an item → span tree + **Agent Graph** tab |
 | Calculator tool I/O on numerical items | the `calculate` tool span's input/output |
-| Per-dimension PASS/FAIL | `certification_result` score comment on the experiment (run-level score) |
+| Per-dimension PASS/FAIL | `certification_result` (BOOLEAN) score comment on the experiment (run-level score) |
+| Scores per prompt version | Langfuse UI → **Prompts** → `usecase-10k-analyst-compose` → **Metrics** |
 | Gate matrix (PASS/FAIL badge) | Portal `/` → row `usecase:10k-analyst` |
 | Run history / trend | Portal `/history/certification/financebench-sample` |
 | Items needing human sign-off | Langfuse UI → **Annotation Queues** → Certification Review |
@@ -117,76 +122,116 @@ uv run python export_results.py --dataset certification/financebench-sample
 The observation → development feedback edge (see
 [`ai-engineering-loop.md` → Edge A](ai-engineering-loop.md#closing-the-loop-what-is-wired-vs-open)):
 
-```bash
-# 1) Monitor flags live compliance violations and routes them to the review queue
-uv run python monitor_production.py --hours 24 --tags production --queue-violations
+1. **Monitor flags it.** The managed evaluators (`setup_evaluators.py`) score every
+   production root observation; a prohibited phrase gives
+   `regulatory_compliance = false`. Without managed evaluators, run the cron
+   fallback: `uv run python monitor_production.py --hours 24 --queue-violations`.
+2. **A human reviews it.** Open the trace (or **Annotation Queues → Certification
+   Review**) and write the correct answer as a **Correction** on the trace.
+3. **Promote it** (human-gated: the Correction becomes the expected answer;
+   `--expected` overrides it; with neither the item is flagged
+   `needs_expected_review`):
 
-# 2) A human reviews the queued traces in Langfuse (Annotation Queues → Certification
-#    Review) and decides the correct answer.
+   ```bash
+   uv run python promote_trace_to_dataset.py \
+       --dataset certification/financebench-sample --trace-id <trace id>
+   ```
 
-# 3) Promote a reviewed trace into the golden dataset (human-gated: supply the
-#    correct answer, or leave it flagged needs_expected_review to fill in the UI)
-uv run python promote_trace_to_dataset.py \
-    --dataset certification/financebench-sample \
-    --from-queue --expected "The FY2019 fixed asset turnover is 24.26"
+4. **Re-run the gate against a reviewed baseline.** The next run regression-tests
+   that real scenario, and `--baseline` names any case that passed in the
+   baseline but fails now:
 
-# 4) Re-certify — the next run now regression-tests that real scenario
-uv run python run_usecase_certification.py --use-case 10k-analyst \
-    --dataset certification/financebench-sample --ci
-```
+   ```bash
+   uv run python run_usecase_certification.py --use-case 10k-analyst \
+       --dataset certification/financebench-sample --ci \
+       --baseline <name of a reviewed experiment>
+   ```
 
 ---
 
-## 6. Demo script (the 5-minute story)
+## 6. Demo script (the 10-minute story)
 
-`scripts/demo_usecase.sh` walks the full lifecycle: setup, lists the AI agents, and
-runs the deployment gate. (If run on a branch where the chosen agent is absent it
-prints a loud `PENDING` banner rather than pretending to succeed — on `main` all
-three run.)
+`scripts/demo_usecase.sh` (`make demo`) provisions everything and runs one gate;
+`make portal` serves the dashboard on <http://localhost:8050>. For the
+**loop-shaped** version of this narration (Trace → Monitor → Build Datasets →
+Experiment → Evaluate), see
+[`ai-engineering-loop.md` → Demoing this](ai-engineering-loop.md#demoing-this).
 
 ```bash
-bash scripts/demo_usecase.sh
+bash scripts/demo_usecase.sh                                          # 10-K agent, Sonnet
+MODEL=claude-haiku-4-5-20251001 bash scripts/demo_usecase.sh          # same agent, Haiku
+USE_CASE=advisory-draft ADVISORY_TEMPT_NONCOMPLIANT=1 bash scripts/demo_usecase.sh   # the FAIL
 ```
 
-> For the **loop-shaped** version of this narration (framed as Trace → Monitor →
-> Build Datasets → Experiment → Evaluate), see
-> [`ai-engineering-loop.md` → Demoing this](ai-engineering-loop.md#demoing-this).
+**Before you present**
+- Pre-run the three commands above so every view has data. Runs take a few
+  minutes each, so don't run them live.
+- Open in tabs: the portal, Langfuse **Experiments**, the
+  "Deployment gate — quality & cost" dashboard, and **Prompts →
+  usecase-10k-analyst-compose → Metrics**.
+- For the production beat (step 6), the demo project has test traces in the
+  `production` environment tagged `deployment-gate-smoke-test`, including one
+  with a prohibited phrase. A fresh project needs production traffic first.
 
-**Narration when demoing live:**
+**Narration**
 
-1. **Reframe** — "We're not gating a model in isolation; we're gating a whole
-   *AI agent* — this 10-K analyst, as a complete system."
-2. **Show the trace** — open one item. Walk the span tree: it *planned*, *pulled
-   the line items*, *called the calculator* (point at the tool span's
-   `6489/((253+282)/2) = 24.26`), then *composed a cited answer*. "It didn't do
-   the math in its head — it used a tool. That's auditable."
-3. **Show the gate** — the `certification_result` comment lists every dimension:
-   accuracy, groundedness, compliance, tool-use. "This is a multi-dimensional
-   gate — PASS means all of them cleared, not just accuracy. That's the reviewable
-   evidence a human signs off on."
-4. **The whole-system lift (observed)** — rerun on Haiku
-   (`--model claude-haiku-4-5-20251001`). On the 10-item sample it also PASSES
-   (~90% numerical accuracy). "Gating the model alone shows Haiku at ~60% raw
-   numerical accuracy (see README FAQ) — but the *agent* wraps it in a
-   calculator tool, so the system passes the gate even on a cheap model. We're
-   gating the system, not the model." (Verified runs: 2026-06-05, Sonnet and
-   Haiku both PASSED.)
-5. **Show a FAIL** — the honest FAIL paths this gate produces:
-   - **Compliance hard-gate** — the Advisory Drafting agent (#11) with an
-     adversarial item containing prohibited language: `regulatory_compliance`
-     drops below 1.00 → gate FAILS even if accuracy is perfect. (The clearest
-     "accurate but can't clear the gate" story.)
-   - **Stricter threshold profile** — raise `numerical_accuracy` to ≥0.95 for a
-     high-stakes agent; the 90%-accurate run then FAILS, and the breakdown
-     names the dimension. (Earlier in development, before the trajectory rule was
-     refined, Sonnet also FAILED on `tool_use_correctness` when judgment questions
-     were wrongly required to use the calculator — a good example of the gate
-     catching a trajectory problem.)
-6. **Show the dashboard** — the Portal row shows the PASS/FAIL badge per run.
-   "A failing number caught here on the dashboard costs nothing; caught after
-   deployment it's a reportable incident — that's why the gate runs before
-   sign-off, because manual approval alone can't keep pace with deployment
-   velocity."
+1. **Reframe.** "We're not gating a model in isolation. We're gating a whole
+   *AI agent* — this 10-K analyst — as a complete system, before it ships."
+2. **Show the trace.** Langfuse → **Experiments** → open the 10-K run → one item.
+   - The **Agent Graph** tab shows the path: plan → retrieve-evidence →
+     **calculate** → compose-answer.
+   - In the tool span, point at `6489/((253+282)/2) = 24.26`: "It didn't do the
+     math in its head — it used a tool. That's auditable."
+3. **Show the gate.**
+   - The run-level `certification_result` is a pass/fail score (`true`), and its
+     comment lists every bar: numerical accuracy ≥ 85%, groundedness ≥ 80%,
+     compliance = 100%, tool use ≥ 90%.
+   - "PASS means all four cleared, not an average of them. The bars live in
+     `cicd/thresholds.json`, so loosening one is a reviewed diff."
+4. **Swap the model.** Show the Haiku run of the same agent next to Sonnet in
+   Langfuse's experiment comparison. On 2026-11-04 Haiku PASSED: 90% numerical
+   accuracy, 96.5% groundedness, compliance and tool use 100%. "The gate decides
+   whether the cheaper model is good enough for this job — with evidence, not
+   opinion."
+   - Don't claim a lift here: on this 10-item sample, Haiku *without* the agent
+     (the model gate) also scores 90–100% numerical accuracy in current runs. The
+     earlier ~60% figure (README, deck) is not reproduced by current data.
+5. **Show a FAIL.** The advisory-draft run with `ADVISORY_TEMPT_NONCOMPLIANT=1`:
+   - The draft is accurate and grounded, but one prohibited phrase drops
+     `regulatory_compliance` below 100%, so the gate FAILS.
+   - "Accurate, but it can't ship." (This path has not been re-run since the
+     SDK v5 upgrade; pre-run it as above.)
+   - Alternative: a stricter profile (numerical accuracy ≥ 95% for a high-stakes
+     desk) fails the 90% run and names the dimension.
+6. **Production.** "The gate doesn't stop at release."
+   - The same compliance and completeness checks run *inside Langfuse* on
+     production traffic as managed evaluators. Their code is generated from the
+     gate's own `evaluators.py`, so they can't drift from the gate.
+   - Open the `deployment-gate-smoke-test` trace with "guaranteed returns":
+     `regulatory_compliance = false`.
+   - Show the dashboard's **compliance true-rate**. An alert on it notifies Slack
+     when it drops below 100%.
+7. **Close the loop.**
+   - A reviewer writes a **Correction** on that trace, and
+     `promote_trace_to_dataset.py` turns it into a golden case.
+   - The next gate run with `--baseline` reports any **newly failing case**,
+     which an average would hide.
+   - Prompt changes close the other loop: **Prompts → Metrics** shows scores,
+     latency and cost per prompt version, so promoting a version and re-running
+     the gate is a measured comparison.
+8. **The matrix.** Back on the portal: one row per dataset × model or agent, each
+   badge judged against the bars that run recorded. "A failing number caught here
+   costs nothing; caught after deployment it's a reportable incident."
+
+**Soft spots to expect in Q&A**
+- The sample is 10 items, so one answer moves a score by 10 points.
+- "Retrieve" means extraction from the supplied filing excerpts, not search.
+- Each bar is itself an average across items. That's why `--baseline` checks
+  cases individually.
+- Even without the tempting prompt, the advisory agent is not fully stable on
+  the adversarial set: it FAILED on 2026-09-24 (compliance 90%, one item) and
+  PASSED on 2026-11-04 (100%). The gate catching that is the point; the
+  hard 100% bar is deliberate (see `cicd/thresholds.json`).
 
 ---
 

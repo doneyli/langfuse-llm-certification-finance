@@ -396,11 +396,12 @@ ITEM_EVALUATORS = [numerical_accuracy_evaluator,
       (plan → retrieve-evidence → calculate → compose-answer); numerical items show
       a populated `calculate` tool span; gate returns PASSED. *(Verified 2026-06-05:
       Sonnet PASSED — numerical 90%, groundedness 93%, compliance 100%, tool-use 100%.)*
-- [x] The calculator tool grounds the arithmetic, so the *system* lifts a weaker
-      model: Haiku also PASSED (~90% numerical) where the model gate shows it ~60% on
-      raw numerical accuracy. The FAIL story comes from the **compliance hard-gate**
+- [x] Haiku also PASSES the agent gate (~90% numerical), with the arithmetic in
+      the calculator tool. The FAIL story comes from the **compliance hard-gate**
       (Advisory agent, §6) or a **stricter threshold profile**, not from swapping in
-      a weaker model. *(Verified 2026-06-05: Haiku PASSED.)*
+      a weaker model. *(Verified 2026-06-05 and again 2026-11-04 on SDK v5: Haiku
+      PASSED, numerical 90%, groundedness 96.5%. The model gate's ~60% Haiku figure
+      from an earlier run is not reproduced by current runs, which score 90–100%.)*
 - [x] `trajectory.operands` and `citations` are non-empty on numerical items.
 - [x] Dashboard shows a `usecase:10k-analyst` row with PASS/FAIL badge (no portal change).
 
