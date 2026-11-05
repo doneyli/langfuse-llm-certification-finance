@@ -23,10 +23,10 @@
 | A2.6 CLI / MCP guidance | **done** | PR 2: `@langfuse/cli` (flags are kebab-case, e.g. `--from-start-time`), MCP server |
 | A2.7 stale README claims | **done** | PR 1 (Experiments nav) + PR 2 (dashboards API, portal-vs-Langfuse, UI promotion) |
 | A2.8 GitHub integration payload | **not applicable** | unchanged, still matches docs |
-| A3.1 managed evaluators + alert | **done, not applied** | PR 3: `setup_evaluators.py` (dry-run verified); creating it in the demo project awaits approval + an LLM connection; alert documented (UI only) |
+| A3.1 managed evaluators + alert | **done, applied 2026-11-04** | PR 3: `setup_evaluators.py` run on the Cloud US demo project: 3 evaluators + 2 rules, rules **disabled**. The judge needs an LLM connection before its rule is enabled; the alert is UI-only (documented) |
 | A3.2 Corrections in promotion | **done** | PR 3 |
 | A3.3 stable item ids + dataset version | **done** | PR 3. Ids are `<dataset-short-name>-<key>` (not `fb-<id>`: item ids are project-unique and the same case lives in `-sample` and `-v1`). `make seed` count guard kept for projects seeded before stable ids |
-| A3.4 dashboards as code | **done, not applied** | PR 3: `setup_dashboards.py` (dry-run verified); creation awaits approval |
+| A3.4 dashboards as code | **done, applied 2026-11-04** | PR 3: "Deployment gate — quality & cost" dashboard on the Cloud US demo project; all 4 widget queries validated via `GET /v2/metrics` |
 | A3.5 CI shape + `--baseline` | **done** | PR 3: docs + opt-in per-case check (verified read-only against two real experiments); CI stays credential-free |
 | A3.6 judge calibration label | **done** | PR 3: `groundedness_label` CATEGORICAL + score config |
 | A4 model refresh | **deferred** | product decision (changes blog/deck figures) |
