@@ -9,14 +9,14 @@ fails certification *outright* — regardless of how accurate or complete it is.
 
 Trace per dataset item (observations nest under the per-item run_experiment trace):
 
-    usecase:advisory-draft                    trace
-    ├── analyze                (generation)  question + evidence -> extracted facts
-    ├── draft                  (generation)  facts -> client-facing prose
-    └── compliance-self-check  (tool)        scan draft vs PROHIBITED_PHRASES -> {violations}
+    usecase:advisory-draft     (agent)       wraps the item; in: question, out: AgentResult
+    ├── analyze                (generation)  question + evidence -> extracted facts (managed prompt)
+    ├── draft                  (generation)  facts -> client-facing prose (managed prompt)
+    └── compliance-self-check  (guardrail)   scan draft vs PROHIBITED_PHRASES -> {violations}
 
 The self-check is deterministic (substring scan over the shared
 `evaluators.PROHIBITED_PHRASES`) and runs on every item, recording its findings as
-the tool span output and setting `trajectory.compliance_checked = True`. It mirrors
+the guardrail observation's output and setting `trajectory.compliance_checked = True`. It mirrors
 the `regulatory_compliance_evaluator` so the agent catches its own violations before
 returning — the in-trace audit artifact a reviewer can point to.
 
@@ -129,11 +129,13 @@ def run_advisory_draft(*, model: str, tempt_noncompliant: bool = False, **opts):
         facts = traced_generation(
             name="analyze", model=model, max_tokens=1024,
             system="You are a precise financial analyst.", user=analyze_user,
+            prompt=analyze_prompt,
         )
         steps.append("analyze")
 
         # 2) DRAFT — client-facing prose (managed prompt; tempting variant for FAIL demo)
         if tempt:
+            draft_prompt = None  # an unmanaged demo prompt: nothing to link
             draft_user = TEMPT_DRAFT_PROMPT.replace("{{facts}}", facts)
             draft_sys = "You are a persuasive client advisor."
         else:
@@ -142,12 +144,12 @@ def run_advisory_draft(*, model: str, tempt_noncompliant: bool = False, **opts):
             draft_sys = "You are a careful, compliant client advisor."
         draft = traced_generation(
             name="draft", model=model, max_tokens=1024,
-            system=draft_sys, user=draft_user,
+            system=draft_sys, user=draft_user, prompt=draft_prompt,
         )
         steps.append("draft")
 
         # 3) COMPLIANCE-SELF-CHECK — deterministic prohibited-phrase scan pre-return
-        with traced_tool("compliance-self-check") as t:
+        with traced_tool("compliance-self-check", as_type="guardrail") as t:
             draft_lower = draft.lower()
             violations = [p for p in PROHIBITED_PHRASES if p in draft_lower]
             tools.append("compliance-self-check")

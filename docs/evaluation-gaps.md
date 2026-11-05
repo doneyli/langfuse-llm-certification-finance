@@ -38,19 +38,19 @@ Combined into a weighted score (70% faithfulness, 30% completeness) — weighted
 
 **Problem:** We wrote scores with ad-hoc names (`numerical_accuracy`, `exact_match`, `groundedness`, etc.) but hadn't created Score Configs in Langfuse. Without them, scores were unstructured — no validation, no defined ranges, no descriptions for team members viewing results in the UI.
 
-**What we added:** `setup_score_configs.py` — a script that creates Score Configs for all 10 evaluator scores via the Langfuse REST API. Each config defines the data type (NUMERIC), value range (0.0-1.0), and a human-readable description. The script is idempotent — re-running it skips existing configs.
+**What we added:** `setup_score_configs.py` — a script that creates Score Configs for all 10 evaluator scores via the Langfuse REST API. Each config defines the data type (BOOLEAN for pass/fail scores, NUMERIC with range 0.0-1.0 for graded ones), and a human-readable description. The script is idempotent — re-running it skips existing configs.
 
 **Configs created:**
-- [x] `numerical_accuracy` — NUMERIC, 0.0-1.0
-- [x] `exact_match` — NUMERIC, 0.0-1.0
-- [x] `sentiment_accuracy` — NUMERIC, 0.0-1.0
-- [x] `regulatory_compliance` — NUMERIC, 0.0-1.0
+- [x] `numerical_accuracy` — BOOLEAN
+- [x] `exact_match` — BOOLEAN
+- [x] `sentiment_accuracy` — BOOLEAN
+- [x] `regulatory_compliance` — BOOLEAN
 - [x] `completeness` — NUMERIC, 0.0-1.0
 - [x] `groundedness` — NUMERIC, 0.0-1.0
 - [x] `avg_numerical_accuracy` — NUMERIC, 0.0-1.0
 - [x] `avg_sentiment_accuracy` — NUMERIC, 0.0-1.0
 - [x] `avg_groundedness` — NUMERIC, 0.0-1.0
-- [x] `certification_result` — NUMERIC, 0.0-1.0
+- [x] `certification_result` — BOOLEAN (gate verdict)
 
 **Langfuse reference:** [Score Configs API](https://api.reference.langfuse.com) — `POST /api/public/score-configs`
 

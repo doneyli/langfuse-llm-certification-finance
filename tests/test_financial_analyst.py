@@ -68,7 +68,7 @@ class TestParseJson:
 
 def _patch_llm(monkeypatch, responses):
     """responses: dict span-name -> returned text. Also stubs span/tool ctx mgrs."""
-    def fake_generation(*, name, system, user, model, max_tokens=1024):
+    def fake_generation(*, name, system, user, model, max_tokens=1024, prompt=None):
         return responses[name]
 
     class _Ctx:

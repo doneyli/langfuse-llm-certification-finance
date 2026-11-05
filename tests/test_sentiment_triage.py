@@ -64,7 +64,7 @@ class TestExtractDriverPhrase:
 # --------------- Agent task (LLM monkeypatched) ---------------
 
 def _patch_llm(monkeypatch, classify_response):
-    def fake_generation(*, name, system, user, model, max_tokens=1024):
+    def fake_generation(*, name, system, user, model, max_tokens=1024, prompt=None):
         return classify_response
 
     class _Ctx:

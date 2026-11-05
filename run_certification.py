@@ -126,18 +126,17 @@ def is_claude_native(model: str) -> bool:
     return model.startswith("claude") and anthropic is not None
 
 
-def call_anthropic_native(question: str, model: str, system: str = None) -> str:
-    """Call Claude via native Anthropic SDK."""
-    client = anthropic.Anthropic()
-    kwargs = {
-        "model": model,
-        "max_tokens": 2048,
-        "messages": [{"role": "user", "content": question}],
-    }
-    if system:
-        kwargs["system"] = system
-    response = client.messages.create(**kwargs)
-    return response.content[0].text
+def call_anthropic_native(question: str, model: str, system: str = None,
+                          prompt=None) -> str:
+    """Call Claude via the native Anthropic SDK, traced as a generation.
+
+    Routed through ``agents.base.traced_generation`` so model-gate traces carry
+    model, token usage and cost (the raw client emits no spans), plus the link
+    to the managed ``prompt`` the question was compiled from.
+    """
+    from agents.base import traced_generation
+    return traced_generation(name="model-under-test", system=system, user=question,
+                             model=model, max_tokens=2048, prompt=prompt)
 
 
 def call_openai_compatible(question: str, model: str, endpoint: str, api_key: str,
@@ -185,7 +184,16 @@ def _get_prompt_template(name: str, fallback: str) -> str:
 
 
 def _build_prompt(inp: dict) -> str:
+    """Build the full prompt text from a dataset item's input (see _build_prompt_with_ref)."""
+    return _build_prompt_with_ref(inp)[0]
+
+
+def _build_prompt_with_ref(inp: dict):
     """Build the full prompt from a dataset item's input.
+
+    Returns ``(text, prompt_client_or_None)``: the managed prompt is returned
+    alongside the compiled text so the generation can be linked to its
+    version in Langfuse prompt management.
 
     Fetches the prompt template from Langfuse prompt management (production label).
     Falls back to hardcoded templates if Langfuse is unavailable.
@@ -206,19 +214,20 @@ def _build_prompt(inp: dict) -> str:
 
         prompt = _get_prompt_template("financial-qa", _FALLBACK_QA)
         if prompt is not None:
-            return prompt.compile(evidence=context_block, question=question)
+            return prompt.compile(evidence=context_block, question=question), prompt
 
         # Direct fallback if prompt object failed
-        return _FALLBACK_QA.replace("{{evidence}}", context_block).replace("{{question}}", question)
+        return (_FALLBACK_QA.replace("{{evidence}}", context_block)
+                .replace("{{question}}", question), None)
 
     # Sentiment items (text-only, no evidence)
     if "text" in inp and "question" not in inp:
         prompt = _get_prompt_template("financial-sentiment", _FALLBACK_SENTIMENT)
         if prompt is not None:
-            return prompt.compile(text=question)
-        return _FALLBACK_SENTIMENT.replace("{{text}}", question)
+            return prompt.compile(text=question), prompt
+        return _FALLBACK_SENTIMENT.replace("{{text}}", question), None
 
-    return question
+    return question, None
 
 
 def create_certification_task(model: str, endpoint: str, api_key: str,
@@ -236,14 +245,15 @@ def create_certification_task(model: str, endpoint: str, api_key: str,
         if isinstance(inp, str):
             inp = {"text": inp}
 
-        prompt = _build_prompt(inp)
+        prompt, prompt_ref = _build_prompt_with_ref(inp)
 
         if not prompt:
             return "Error: no question found in dataset item"
 
         # Route to appropriate LLM client
         if is_claude_native(model):
-            return call_anthropic_native(prompt, model, system=system)
+            return call_anthropic_native(prompt, model, system=system,
+                                         prompt=prompt_ref)
         else:
             return call_openai_compatible(prompt, model, endpoint, api_key,
                                           system=system)

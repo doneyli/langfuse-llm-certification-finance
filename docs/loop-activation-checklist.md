@@ -143,5 +143,8 @@ out of scope for this repo — follow the Langfuse guide if you want it:
 - **Edge A expected answers.** A human decides the correct answer for a promoted
   trace (or fills `needs_expected_review` in the UI). We never treat a flagged
   trace's output as ground truth.
-- **One-click UI promotion.** Promotion is a deliberate CLI step, not a UI button —
-  the right friction for changing what counts as "golden" for a regulated AI agent.
+- **UI vs CLI promotion.** Langfuse offers one-click promotion in the UI ("+ Add to
+  dataset", batch add from the Observations table, Corrections). This repo
+  documents the CLI step as the audited path — deterministic ids, provenance, and a
+  human-supplied expected answer — the right friction for changing what counts as
+  "golden" for a regulated AI agent.

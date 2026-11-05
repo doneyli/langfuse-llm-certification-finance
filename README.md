@@ -274,7 +274,7 @@ uv run python setup_datasets.py --dataset financebench --sample
 #### 3. Set up Langfuse configuration
 
 ```bash
-uv run python setup_score_configs.py        # Register score types in Langfuse
+uv run python setup_score_configs.py        # Register score types in Langfuse (pass/fail scores are BOOLEAN)
 uv run python setup_annotation_queues.py    # Create human review queue
 uv run python setup_prompts.py              # Register prompt templates
 ```
@@ -447,6 +447,8 @@ Langfuse is the source of truth for the evidence:
 - **Every gate run is an Experiment** (Langfuse UI → **Experiments**, or the URL the runner prints). Compare runs side by side against a baseline there.
 - **Item-level scores** (numerical_accuracy, groundedness, etc.) are attached to each experiment item and visible per item in the experiment view.
 - **Run-level scores** (`certification_result`, `avg_numerical_accuracy`, `avg_groundedness`, …) are stored **on the experiment itself** by the Langfuse SDK (`run_evaluators`) — no extra write. Read them with `GET /api/public/experiments?fields=scores` (what the portal and `export_results.py` do).
+- **Pass/fail scores are BOOLEAN.** The gate verdict `certification_result` and the binary item checks (`regulatory_compliance`, `tool_use_correctness`, `numerical_accuracy`, `exact_match`, `sentiment_accuracy`) are written as Langfuse BOOLEAN scores (`true`/`false`); `groundedness`, `completeness` and every `avg_*` stay NUMERIC. That unlocks boolean dashboard widgets and **alerts on the true-rate** (e.g. notify when `regulatory_compliance` drops below 100%), and Score Analytics confusion matrices against human labels. A project that registered these configs as NUMERIC before can migrate with `setup_score_configs.py --migrate-configs` (archives the old config, creates the BOOLEAN one; run `--dry-run` first).
+- **Agent traces render as an Agent Graph.** Each item runs inside one `usecase:<name>` agent observation, with `retriever`, `tool` and `guardrail` steps beneath it, and generations compiled from a managed prompt are linked to that prompt version (Prompts → Metrics shows scores, latency and cost per version).
 - **The bars a run was judged against** are recorded in the experiment's metadata (`gate_thresholds` for agent runs, `threshold` + `gate` for model runs). Runs recorded before the SDK v5 upgrade carry no metadata in the v4 API, so the portal shows their verdict without a bar.
 
 ### `export_results.py` — Evidence exporter
@@ -597,21 +599,22 @@ The portal reads live data from your Langfuse instance (same `LANGFUSE_*` creden
 
 ### Portal vs Langfuse dashboards
 
-Some metrics can also be visualized using [Langfuse Custom Dashboards](https://langfuse.com/docs/metrics/features/custom-dashboards) (created in the UI — no API for dashboard creation). Use both:
+Langfuse covers most of the evaluation surface natively. [Custom Dashboards](https://langfuse.com/docs/metrics/features/custom-dashboards) can be built in the UI or as code (dashboards/widgets API, the CLI's `unstable-dashboards` resource, and the MCP server). **Experiments** are first-class: compare a run against a baseline, compare items side by side and filter them by score thresholds, chart scores across runs, and annotate or correct outputs in context.
+
+What the portal still adds is the gate itself. It shows a **PASS/FAIL matrix per dataset × model** (or agent), judged against the **thresholds-as-code** bars in `cicd/thresholds.json` that each run recorded, so a historical run always shows the bar it was judged by.
 
 | What to track | Where | Why |
 |---|---|---|
-| Score trends over time | **Langfuse dashboard** | Native widget: `scores-numeric` view, dimension `name`, time granularity `day` |
-| Compliance violations | **Langfuse dashboard** | Native widget: filter `name=regulatory_compliance`, count where value=0 |
-| Cost & latency by model | **Langfuse dashboard** | Native widget: `observations` view, dimension `providedModelName` |
-| Pass/fail gate matrix | **Portal** | Langfuse can't join dataset run metadata to scores or show threshold-based badges |
-| Run-level aggregation per experiment | **Portal** | Dashboards query individual scores, not scoped to a specific dataset run |
-| Per-item drill-down with all scores | **Portal** | Dashboards show aggregate charts, not item-level tables |
-| Run history & trend by dataset | **Portal** | No dataset run concept in the dashboard query engine |
+| Score trends over time | **Langfuse dashboard** | `scores-numeric` view, dimension `name`, time granularity `day` |
+| Compliance true-rate + alerts | **Langfuse dashboard / Alerts** | `regulatory_compliance` is a BOOLEAN score: `scores-boolean` view, `avg(value)` = true-rate; alert when it drops below 1 |
+| Cost & latency by model | **Langfuse dashboard** | `observations` view, dimension `providedModelName` |
+| Run vs baseline, per-item diffs, cross-run charts | **Langfuse Experiments** | Native experiment comparison |
+| Pass/fail gate matrix against recorded bars | **Portal** | One row per dataset × model/agent, badge = the run's `certification_result` against its recorded thresholds |
+| Gate history by dataset with the bar in force | **Portal** | Each run's recorded `gate_thresholds` / `threshold`, not today's |
 
-**Recommended Langfuse dashboard setup** (create manually in UI > Dashboards > New):
+**Recommended Langfuse dashboard setup** (UI > Dashboards > New, or via the dashboards API):
 1. **Avg scores over time** — line chart, `scores-numeric` view, measure `avg(value)`, dimension `name`, time granularity `day`
-2. **Compliance violations** — bar chart, `scores-numeric` view, filter `name=regulatory_compliance`, filter `value=0`, measure `count`
+2. **Compliance true-rate** — line chart, `scores-boolean` view, filter `name=regulatory_compliance`, measure `avg(value)`
 3. **Score distribution** — bar chart, `scores-numeric` view, measure `avg(value)`, dimension `name`
 4. **Cost by model** — bar chart, `observations` view, measure `sum(totalCost)`, dimension `providedModelName`
 
@@ -624,12 +627,15 @@ repo already uses (no extra login), and neither is required to run the gate.
 
 - **[Langfuse CLI](https://langfuse.com/docs/api-and-data-platform/features/cli)** — a thin wrapper over the full REST API. Quick checks after a run:
   ```bash
-  npx langfuse-cli --env .env api datasets list          # confirm golden datasets loaded
-  npx langfuse-cli --env .env api traces list --limit 10 # recent gate-run traces
-  npx langfuse-cli --env .env api prompts list           # managed prompts
+  npx @langfuse/cli --env .env api datasets list                    # confirm golden datasets loaded
+  npx @langfuse/cli --env .env api experiments list \
+      --from-start-time 2026-01-01T00:00:00Z --fields core,scores   # gate runs + verdicts
+  npx @langfuse/cli --env .env api observations list --is-root-observation true --limit 10
+  npx @langfuse/cli --env .env api prompts list                     # managed prompts
   ```
-  (Install once with `npm i -g langfuse-cli`, then call it as `langfuse api …`.)
+  (Install once with `npm i -g @langfuse/cli`, then call it as `langfuse api …`. The old `langfuse-cli` package is deprecated.)
 - **[Langfuse agent skill](https://langfuse.com/docs/api-and-data-platform/features/agent-skill)** — an Agent-Skills-standard skill (Claude Code, Cursor, Windsurf…) that teaches an agent Langfuse best practices and drives the CLI: query traces, build datasets, migrate prompts. Add it with `npx skills add langfuse/skills --skill "langfuse"`.
+- **[Langfuse MCP server](https://langfuse.com/docs/api-and-data-platform/features/mcp-server)** — the authenticated, project-scoped MCP endpoint at `https://<host>/api/public/mcp` (EU `cloud.langfuse.com`, US `us.cloud.langfuse.com`, or self-hosted), Basic auth with the same keys: `claude mcp add --transport http langfuse https://us.cloud.langfuse.com/api/public/mcp --header "Authorization: Basic <base64 pk:sk>"`.
 
 See [`AGENTS.md`](AGENTS.md) for how these fit the end-to-end agentic workflow.
 

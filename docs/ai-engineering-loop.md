@@ -95,9 +95,9 @@ and each step is a span, so the trace *is* the audit artifact a model-risk
 reviewer opens:
 
 ```
-usecase:10k-analyst                                   (trace = one dataset item)
+usecase:10k-analyst    agent         (one per dataset item → Agent Graph in Langfuse)
 ├── plan               generation   "CALCULATE: revenue / avg PP&E"
-├── retrieve-evidence  span          └─ extract-operands  generation → {operands, citations}
+├── retrieve-evidence  retriever     └─ extract-operands  generation → {operands, citations}
 ├── calculate          tool          in "6489/((253+282)/2)"  out 24.26
 └── compose-answer     generation    grounded, cited answer
 ```
@@ -106,7 +106,11 @@ usecase:10k-analyst                                   (trace = one dataset item)
 the calculator step matters most — *"it didn't do the math in its head, it used a
 tool, and here is the exact expression."* That is the difference between a plausible
 answer and an auditable one. (Sentiment-triage emits `classify → rationale →
-route`; advisory-draft emits `analyze → draft → compliance-self-check`.)
+route`; advisory-draft emits `analyze → draft → compliance-self-check`, the last
+as a `guardrail` observation.) Generations compiled from a managed prompt are
+linked to that prompt version, so Langfuse **Prompts → Metrics** shows scores,
+latency and cost per version — the evidence behind Edge B's "promote a prompt,
+re-run the gate, compare versions".
 
 **Langfuse primitive:** Observations (generation / span / tool) nested under one
 trace per item. **See it:** Langfuse UI → **Datasets** → run → open an item.
@@ -252,8 +256,12 @@ reviewer supplies the correct answer (`--expected`) or the item is flagged
 So the loop closes, but a person still authorizes what becomes "golden" — the right
 control for a regulated AI agent.
 
-**Still open:** a *one-click* UI promotion (annotate → add to dataset without the
-CLI) is not built; the promotion is a deliberate CLI step.
+**In the Langfuse UI too:** Langfuse now has one-click promotion — **+ Add to
+dataset** on a trace or observation, batch add from the Observations table, and
+**Corrections** (a reviewer writes the corrected output in context). Those are the
+quick path; `promote_trace_to_dataset.py` remains the audited path this repo
+documents (deterministic `prod-<traceId>` ids, `source_trace_id` provenance,
+human-supplied expected answer).
 
 ### Edge B — Ship → Re-run the gate (Evaluate → deploy → Trace), and the GitHub / CI-CD question · *receiver implemented; needs Langfuse config + first live dispatch*
 
@@ -335,7 +343,7 @@ prompt change, not just on a code push.
 | 3 Build Datasets | Datasets + items | ✅ designed + adversarial wired; real-failure promotion implemented (`promote_trace_to_dataset.py`, Edge A — pending first live run) |
 | 4 Experiment | Experiments; prompt versions | ✅ wired (model / prompt / threshold comparisons) |
 | 5 Evaluate | Scores + multi-dim gate | ✅ wired (`usecase_certification_gate`) |
-| **A** Monitor → Dataset | `--queue-violations` → review → `promote_trace_to_dataset.py` | ✅ implemented + offline-tested (human-gated); pending first live run; one-click UI promotion open |
+| **A** Monitor → Dataset | `--queue-violations` → review → `promote_trace_to_dataset.py` | ✅ implemented + offline-tested (human-gated); pending first live run; UI alternative: "+ Add to dataset" / Corrections |
 | **B** Prompt promote → re-run gate | GitHub `repository_dispatch` + sync webhook | 🟡 receiver implemented + offline-tested (`prompt-recert.yml`, deduped + concurrency-guarded, renders a skip-vs-pass verdict to the job summary); needs one-time Langfuse config + first live dispatch; sync-to-repo open |
 | The quality bar | Thresholds as code | ✅ `cicd/thresholds.json` — one reviewable file for all four gates, drift-tested |
 

@@ -82,27 +82,50 @@ def _client():
     return _anthropic_client
 
 
-def traced_generation(*, name: str, system: str, user: str, model: str,
-                      max_tokens: int = 1024) -> str:
+def linkable_prompt(prompt):
+    """The prompt to link to a generation, or None.
+
+    Only a prompt actually served by Langfuse prompt management is linked: a
+    fallback (``is_fallback``) or a plain template string has no version in
+    Langfuse, so linking it would attribute metrics to nothing.
+    """
+    if prompt is None or getattr(prompt, "is_fallback", False):
+        return None
+    if not hasattr(prompt, "version"):
+        return None
+    return prompt
+
+
+def traced_generation(*, name: str, system: str | None, user: str, model: str,
+                      max_tokens: int = 1024, prompt=None) -> str:
     """One LLM call wrapped in a Langfuse generation span (model, usage, IO).
 
     The raw ``anthropic.Anthropic()`` client emits no spans; this wrapper opens a
     generation observation so each agent LLM step shows up in the trace tree with
     model name and token usage. Inside a ``run_experiment`` task there is already
     an active trace per item, so this generation nests under it automatically.
+
+    ``prompt`` is the Langfuse ``PromptClient`` the ``user`` text was compiled
+    from (``cert_common.get_managed_prompt``). Linking it fills Langfuse's
+    Prompts → Metrics tab per version (scores, latency, cost), which is the
+    per-version evidence behind "promote a prompt, re-run the gate".
     """
     lf = get_client()
     with lf.start_as_current_observation(
         as_type="generation",
         name=name,
         model=model,
-        input={"system": system, "user": user},
+        input={"system": system, "user": user} if system else {"user": user},
+        prompt=linkable_prompt(prompt),
     ) as gen:
+        kwargs = {}
+        if system:
+            kwargs["system"] = system
         resp = _client().messages.create(
             model=model,
             max_tokens=max_tokens,
-            system=system,
             messages=[{"role": "user", "content": user}],
+            **kwargs,
         )
         text = resp.content[0].text
         gen.update(
@@ -115,14 +138,48 @@ def traced_generation(*, name: str, system: str, user: str, model: str,
         return text
 
 
-def traced_span(name: str, **kwargs):
-    """Context manager for a non-LLM agent step (retrieval, extraction)."""
-    return get_client().start_as_current_observation(as_type="span", name=name, **kwargs)
+def traced_span(name: str, *, as_type: str = "span", **kwargs):
+    """Context manager for a non-LLM agent step.
+
+    Pass ``as_type="retriever"`` for evidence retrieval. Any observation type
+    other than span/event/generation makes Langfuse render the trace's Agent
+    Graph.
+    """
+    return get_client().start_as_current_observation(as_type=as_type, name=name, **kwargs)
 
 
-def traced_tool(name: str, **kwargs):
-    """Context manager for a deterministic tool call (calculator, router, scanner)."""
-    return get_client().start_as_current_observation(as_type="tool", name=name, **kwargs)
+def traced_tool(name: str, *, as_type: str = "tool", **kwargs):
+    """Context manager for a deterministic tool call (calculator, router).
+
+    Pass ``as_type="guardrail"`` for a pre-return safety check.
+    """
+    return get_client().start_as_current_observation(as_type=as_type, name=name, **kwargs)
+
+
+def _agent_input(item):
+    inp = item.input if hasattr(item, "input") else (item or {}).get("input", {})
+    if isinstance(inp, dict):
+        return inp.get("question") or inp.get("text") or inp
+    return inp
+
+
+def as_agent_task(task, use_case: str):
+    """Wrap an agent task so each item runs inside one ``agent`` observation.
+
+    The agent observation (``usecase:<name>``) is the parent of every step the
+    agent takes, carries the question as input and the ``AgentResult`` dict as
+    output, and gives the trace an Agent Graph. Applied by
+    ``run_usecase_certification.py``; agent modules stay unaware of it, so
+    their unit tests call the bare task.
+    """
+    def wrapped(*, item, **kwargs):
+        with get_client().start_as_current_observation(
+            as_type="agent", name=f"usecase:{use_case}", input=_agent_input(item),
+        ) as agent:
+            out = task(item=item, **kwargs)
+            agent.update(output=out)
+            return out
+    return wrapped
 
 
 # --------------- Use-case registry ---------------

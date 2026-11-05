@@ -9,12 +9,15 @@ ratio computation, year-over-year changes — with citations to line items, and 
 Trace per dataset item (nesting verified against run_experiment — see
 scripts/spike_span_nesting.py):
 
-    usecase:10k-analyst                      trace
+    usecase:10k-analyst    (agent)       wraps the item; in: question, out: AgentResult
     ├── plan               (generation)  classify; decide if calc is needed; list line items
-    ├── retrieve-evidence  (span)
+    ├── retrieve-evidence  (retriever)
     │     └── extract-operands (generation)  read excerpts -> arithmetic expr + operands + citations
     ├── calculate          (tool)         deterministic safe_eval of the expression (numerical Qs)
-    └── compose-answer     (generation)  grounded answer + citations
+    └── compose-answer     (generation)  grounded answer + citations; linked to its managed prompt
+
+  The agent observation is added by run_usecase_certification.py
+  (agents.base.as_agent_task); non-span types give the trace an Agent Graph.
 
 Design note — prompt ownership:
   The plan and extract steps emit JSON we parse, so their prompts are code-owned
@@ -195,7 +198,7 @@ def run_10k_analyst(*, model: str, **opts):
         needs_calc = bool(plan.get("needs_calc"))
 
         # 2) RETRIEVE-EVIDENCE — extract operands / expression from the filing
-        with traced_span("retrieve-evidence") as s:
+        with traced_span("retrieve-evidence", as_type="retriever") as s:
             extract_raw = traced_generation(
                 name="extract-operands", model=model, max_tokens=1024,
                 system=EXTRACT_SYS,
@@ -249,7 +252,7 @@ def run_10k_analyst(*, model: str, **opts):
 
         answer = traced_generation(
             name="compose-answer", model=model, max_tokens=1024,
-            system=compose_sys, user=compose_user,
+            system=compose_sys, user=compose_user, prompt=compose_prompt,
         )
         steps.append("compose-answer")
 
