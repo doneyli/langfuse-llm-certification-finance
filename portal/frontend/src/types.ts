@@ -19,6 +19,13 @@ export interface PrimaryScore {
  */
 export type GateThresholds = Record<string, number>;
 
+/**
+ * Advisory bars, same shape as `GateThresholds`. Measured and reported on
+ * every run, never part of the verdict: a run can miss one and still pass.
+ * Recorded apart from the gate, so an older run (or a stale payload) has none.
+ */
+export type AdvisoryThresholds = Record<string, number>;
+
 export interface DashboardRow {
   model: string;
   dataset: string;
@@ -29,6 +36,7 @@ export interface DashboardRow {
    *  dimension's bar; null when the run recorded no bar for that score. */
   threshold: number | null;
   gate_thresholds: GateThresholds | null;
+  advisory_thresholds?: AdvisoryThresholds | null;
   run_name: string;
   timestamp: string;
   cert_comment: string;
@@ -42,6 +50,7 @@ export interface HistoryRun {
   /** Bar for `primary_score`; see `DashboardRow.threshold`. */
   threshold: number | null;
   gate_thresholds: GateThresholds | null;
+  advisory_thresholds?: AdvisoryThresholds | null;
   timestamp: string;
   cert_comment: string;
 }
@@ -59,6 +68,9 @@ export interface ScoreAggregate {
   /** Whether the unrounded mean cleared `bar`, decided server-side; null when
    *  there is no bar. */
   cleared: boolean | null;
+  /** True when `bar` is advisory: `cleared` then means met or missed, never
+   *  passed or failed, and it did not decide the run's status. */
+  advisory?: boolean;
 }
 
 export interface RunItem {
@@ -78,6 +90,7 @@ export interface RunDetail {
   /** Scalar bar of a model gate; null for agent runs (see gate_thresholds). */
   threshold: number | null;
   gate_thresholds: GateThresholds | null;
+  advisory_thresholds?: AdvisoryThresholds | null;
   status: CertStatus;
   total_items: number;
   aggregates: Record<string, ScoreAggregate>;

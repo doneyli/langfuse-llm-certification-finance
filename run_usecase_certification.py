@@ -52,7 +52,7 @@ except ImportError:
 
 from agents import AGENT_REGISTRY
 from agents.base import as_agent_task
-from evaluators import average_score_evaluator, usecase_certification_gate
+from evaluators import average_score_evaluator, measure_bars, usecase_certification_gate
 from cert_common import dataset_version, queue_failed_items
 
 # All three agents ship registered. The list stays separate from AGENT_REGISTRY
@@ -107,15 +107,22 @@ def parse_args():
     return parser.parse_args()
 
 
+def _fmt_bars(bars):
+    return ", ".join(f"{k}>={v:.0%}" for k, v in bars.items())
+
+
 def list_use_cases():
     print("Use cases:", file=sys.stderr)
     for name in KNOWN_USE_CASES:
         entry = AGENT_REGISTRY.get(name)
         if entry:
-            dims = ", ".join(f"{k}>={v:.0%}" for k, v in entry["gate_thresholds"].items())
             print(f"  [registered] {name:18s} {entry['description']}", file=sys.stderr)
             print(f"               dataset hint: {entry['dataset_hint']}", file=sys.stderr)
-            print(f"               gate: {dims}", file=sys.stderr)
+            print(f"               gate (required): {_fmt_bars(entry['gate_thresholds'])}",
+                  file=sys.stderr)
+            if entry.get("advisory_thresholds"):
+                print(f"               advisory (does not block): "
+                      f"{_fmt_bars(entry['advisory_thresholds'])}", file=sys.stderr)
         else:
             print(f"  [unavailable] {name:18s} agent module missing or not "
                   f"registered — check `python -c 'import "
@@ -238,6 +245,7 @@ def main():
 
     langfuse = get_client()
     gate_thresholds = entry["gate_thresholds"]
+    advisory_thresholds = entry.get("advisory_thresholds") or {}
     gate_dims = list(gate_thresholds.keys())
 
     print("Use-Case Certification Runner", file=sys.stderr)
@@ -245,8 +253,10 @@ def main():
     print(f"  Use case:    {args.use_case}  ({entry['description']})", file=sys.stderr)
     print(f"  Model:       {args.model}", file=sys.stderr)
     print(f"  Dataset:     {args.dataset}", file=sys.stderr)
-    print(f"  Gate dims:   {', '.join(f'{k}>={v:.0%}' for k, v in gate_thresholds.items())}",
-          file=sys.stderr)
+    print(f"  Gate dims:   {_fmt_bars(gate_thresholds)}", file=sys.stderr)
+    if advisory_thresholds:
+        print(f"  Advisory:    {_fmt_bars(advisory_thresholds)}  (reported, does not block)",
+              file=sys.stderr)
     print(f"  Concurrency: {args.max_concurrency}", file=sys.stderr)
 
     try:
@@ -270,8 +280,10 @@ def main():
     # gives the trace its Agent Graph in Langfuse.
     task = as_agent_task(entry["fn"](model=args.model), args.use_case)
     item_evaluators = entry["item_evaluators"]
-    run_evaluators = [average_score_evaluator(dim) for dim in gate_dims]
-    run_evaluators.append(usecase_certification_gate(gate_thresholds))
+    run_evaluators = [average_score_evaluator(dim)
+                      for dim in [*gate_dims, *advisory_thresholds]]
+    run_evaluators.append(usecase_certification_gate(gate_thresholds,
+                                                     advisory=advisory_thresholds))
 
     effective_model = f"usecase:{args.use_case}"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -297,7 +309,12 @@ def main():
             "use_case": args.use_case,
             "base_model": args.model,
             "dataset": args.dataset,
+            # Required bars only. The portal and the evidence pack replay a
+            # run's verdict as all() over this key (cert_common.recorded_gate),
+            # so advisory bars are recorded under their own key, never here.
             "gate_thresholds": gate_thresholds,
+            **({"advisory_thresholds": advisory_thresholds}
+               if advisory_thresholds else {}),
             "dataset_version": dataset_version(dataset.items),
             "dataset_item_count": len(dataset.items),
         },
@@ -330,8 +347,19 @@ def main():
         if ev.name.startswith("avg_"):
             print(f"  {ev.name}: {ev.comment}", file=sys.stderr)
 
+    # Advisory bars: same measurement as the gate, never part of the verdict
+    # or the --ci exit code.
+    if advisory_thresholds:
+        print("  Advisory (reported, does not block):", file=sys.stderr)
+        rows = measure_bars(advisory_thresholds, result.item_results or [])
+        for dim, (avg, met, bar, n) in rows.items():
+            print(f"    {dim}: {avg:.1%} vs >={bar:.0%} over {n} items -> "
+                  f"{'met' if met else 'MISS'}", file=sys.stderr)
+
     # Run-level scores (certification_result, avg_*) are stored on the
-    # experiment by the SDK itself.
+    # experiment by the SDK itself, with datasetRunId = the experiment id, so
+    # GET /api/public/v3/scores?experimentId=<id> returns them. Never re-post
+    # them with a traceId: that attaches them to one item's trace instead.
     print(f"\nView in Langfuse (Experiments): "
           f"{getattr(result, 'experiment_url', None) or args.dataset}",
           file=sys.stderr)

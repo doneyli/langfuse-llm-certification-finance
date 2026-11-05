@@ -33,11 +33,14 @@ from datetime import datetime
 
 from cert_common import (
     api_get,
+    bar_verdict,
+    describe_advisory,
     describe_gate,
     lookback_from_env,
     normalize_run_metadata,
     paginate_cursor,
     parse_json_field,
+    recorded_advisory,
     recorded_gate,
     score_value,
 )
@@ -143,22 +146,31 @@ def collect_run_data(dataset_name, run_name=None):
             "scores": item_scores,
         })
 
+    # Each score's bar and whether it cleared, from the run's own metadata and
+    # the unrounded mean the gate compared (the rounded mean is display-only).
+    run_metadata = normalize_run_metadata(run.get("metadata"))
+    means = {name: sum(values) / len(values)
+             for name, values in score_totals.items() if values}
+    required = recorded_gate(run_metadata, means) or {}
+    advisory = recorded_advisory(run_metadata) or {}
+
     aggregates = {}
     for name, values in score_totals.items():
         if values:
             aggregates[name] = {
-                "mean": round(sum(values) / len(values), 3),
+                "mean": round(means[name], 3),
                 "min": round(min(values), 3),
                 "max": round(max(values), 3),
                 "count": len(values),
                 "pass_rate": round(sum(1 for v in values if v >= 0.5) / len(values), 3),
+                **bar_verdict(name, means[name], required, advisory),
             }
 
     return {
         "dataset": dataset_name,
         "run_name": run["name"],
         "experiment_id": run.get("id"),
-        "run_metadata": normalize_run_metadata(run.get("metadata")),
+        "run_metadata": run_metadata,
         "run_scores": run_scores,
         "exported_at": datetime.now().isoformat(),
         "total_items": len(items_data),
@@ -168,6 +180,22 @@ def collect_run_data(dataset_name, run_name=None):
 
 
 # --------------- Formatters ---------------
+
+def _bar_cell(agg: dict) -> str:
+    """'≥ 80% PASS', '≥ 70% MISS (advisory)', or '—' when the gate judged nothing.
+
+    Required bars read PASS/FAIL and advisory bars MET/MISS, the same words the
+    certification_result comment uses, so the two never disagree.
+    """
+    bar = agg.get("bar")
+    if bar is None:
+        return "—"
+    cleared = agg.get("cleared")
+    if agg.get("advisory"):
+        word = "MET" if cleared else "MISS"
+        return f"≥ {bar:.0%} {word} (advisory)"
+    return f"≥ {bar:.0%} {'PASS' if cleared else 'FAIL'}"
+
 
 def _dataset_version_line(meta: dict) -> str:
     """The golden-set state the run used (newest item change), if recorded."""
@@ -185,6 +213,9 @@ def format_markdown(data: dict) -> str:
     # run records one per dimension, and a run that recorded none says so
     # rather than being reported against a bar nothing enforced.
     gate = recorded_gate(data["run_metadata"], data["aggregates"])
+    # Advisory bars were reported but never decided the result, so they get a
+    # row of their own rather than joining the "all must clear" gate.
+    advisory = recorded_advisory(data["run_metadata"])
 
     # Pass/fail is the run's own certification_result score (on the experiment).
     cert = (data.get("run_scores") or {}).get("certification_result") or {}
@@ -206,17 +237,18 @@ def format_markdown(data: dict) -> str:
         f"| **Date** | {data['exported_at'][:10]} |",
         f"| **Items Evaluated** | {data['total_items']} |",
         f"| **Gate** | {describe_gate(gate)} |",
+        *([f"| **Advisory** | {describe_advisory(advisory)} |"] if advisory else []),
         f"| **Result** | **{status}** |",
         f"",
         f"## Scores Summary",
         f"",
-        f"| Evaluator | Mean | Min | Max | Count | Pass Rate |",
-        f"|-----------|------|-----|-----|-------|-----------|",
+        f"| Evaluator | Bar | Mean | Min | Max | Count | Pass Rate |",
+        f"|-----------|-----|------|-----|-----|-------|-----------|",
     ]
 
     for name, agg in sorted(data["aggregates"].items()):
         lines.append(
-            f"| {name} | {agg['mean']:.3f} | {agg['min']:.3f} | "
+            f"| {name} | {_bar_cell(agg)} | {agg['mean']:.3f} | {agg['min']:.3f} | "
             f"{agg['max']:.3f} | {agg['count']} | {agg['pass_rate']:.0%} |"
         )
 

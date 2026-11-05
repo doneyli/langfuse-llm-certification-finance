@@ -6,16 +6,19 @@ interface Props {
   /** A verdict decided server-side against the unrounded mean. When given it
    *  wins over comparing `value` (which may be a rounded display value). */
   cleared?: boolean | null;
+  /** The bar is advisory: a miss is a warning, never a failure. */
+  advisory?: boolean;
 }
 
-export default function ScoreBar({ value, threshold, cleared }: Props) {
+export default function ScoreBar({ value, threshold, cleared, advisory }: Props) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return <span className="score-pill mute">—</span>;
   }
   const pct = Math.max(0, Math.min(1, value)) * 100;
   const passed =
     cleared != null ? cleared : threshold != null ? value >= threshold : null;
-  const verdict = passed === null ? "neutral" : passed ? "pass" : "fail";
+  const verdict =
+    passed === null ? "neutral" : passed ? "pass" : advisory ? "warn" : "fail";
   return (
     <div className="score-bar">
       <div className="score-bar-track">

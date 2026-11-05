@@ -91,8 +91,10 @@ This performs the run:
    (plan → retrieve → calculate → compose).
 2. Item evaluators score each trace; run evaluators aggregate.
 3. `usecase_certification_gate` writes `certification_result` = PASS only if
-   **every** dimension clears its threshold — a multi-dimensional gate, not a
-   single score.
+   **every** required dimension clears its threshold — a multi-dimensional gate,
+   not a single score. Advisory bars (`"required": false` in
+   `cicd/thresholds.json`) are listed in the same comment as `MET`/`MISS` but
+   never change the verdict.
 4. `--queue-failures` routes hard-failing items to the annotation queue.
 
 **CI gate:** add `--ci` to exit 1 on FAIL (drop-in for the GitHub Actions job).

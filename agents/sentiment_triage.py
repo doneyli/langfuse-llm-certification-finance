@@ -35,7 +35,8 @@ from agents.base import (
     traced_span,
     traced_tool,
 )
-from cert_common import agent_gate_thresholds, get_managed_prompt
+from cert_common import (agent_advisory_thresholds, agent_gate_thresholds,
+                         get_managed_prompt)
 from evaluators import (
     sentiment_evaluator,
     regulatory_compliance_evaluator,
@@ -192,6 +193,7 @@ def run_sentiment_triage(*, model: str, route_threshold: float = ROUTE_THRESHOLD
 # (hard — no prohibited phrase leaks into the label), tool_use_correctness
 # (hard — the route tool must run on every item).
 GATE_SENTIMENT_TRIAGE = agent_gate_thresholds("sentiment-triage")
+ADVISORY_BARS_SENTIMENT_TRIAGE = agent_advisory_thresholds("sentiment-triage")  # measured, never blocks
 
 ITEM_EVALUATORS = [
     sentiment_evaluator,
@@ -203,6 +205,7 @@ register_agent(
     "sentiment-triage",
     fn=run_sentiment_triage,
     gate_thresholds=GATE_SENTIMENT_TRIAGE,
+    advisory_thresholds=ADVISORY_BARS_SENTIMENT_TRIAGE,
     item_evaluators=ITEM_EVALUATORS,
     dataset_hint="fpb",
     description="Market Sentiment Triage — classify sentiment and route low-confidence items to a human",

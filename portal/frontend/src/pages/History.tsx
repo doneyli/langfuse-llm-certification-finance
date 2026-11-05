@@ -82,6 +82,7 @@ function tableRow(dataset: string, run: HistoryRun): TableRowType {
           <ThresholdCell
             threshold={run.threshold}
             gate={run.gate_thresholds}
+            advisory={run.advisory_thresholds}
             detailsHref={detailsHref}
           />
         ),

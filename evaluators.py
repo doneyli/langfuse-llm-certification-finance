@@ -572,14 +572,39 @@ def certification_gate(score_name: str, threshold: float = DEFAULT_THRESHOLD):
     return evaluator
 
 
-def usecase_certification_gate(thresholds: dict):
+def measure_bars(bars: dict, item_results) -> dict:
+    """Judge a run's item scores against bars: {name: (avg, cleared, bar, n)}.
+
+    ``avg`` is the unrounded mean of the item scores named ``name``; a name with
+    no scores averages 0.0 and does not clear. The one rule behind both tiers of
+    ``usecase_certification_gate`` and the runner's advisory summary, so the two
+    cannot disagree about whether a bar was met.
+    """
+    rows = {}
+    for name, thr in bars.items():
+        values = [
+            ev.value for result in item_results
+            for ev in result.evaluations
+            if ev.name == name and ev.value is not None
+        ]
+        avg = sum(values) / len(values) if values else 0.0
+        rows[name] = (avg, avg >= thr, thr, len(values))
+    return rows
+
+
+def usecase_certification_gate(thresholds: dict, advisory: dict | None = None):
     """Factory: multi-dimensional run-level gate for use-case certification.
 
     Unlike ``certification_gate`` (one score vs one threshold), a use case is
-    certified only if EVERY dimension's run-level average clears its threshold at
-    once — accuracy AND groundedness AND compliance AND tool-use correctness. A
-    dimension with no recorded scores averages to 0.0 and therefore fails (you
-    cannot certify a bar you did not measure).
+    certified only if EVERY required dimension's run-level average clears its
+    threshold at once — accuracy AND groundedness AND compliance AND tool-use
+    correctness. A dimension with no recorded scores averages to 0.0 and
+    therefore fails (you cannot certify a bar you did not measure).
+
+    ``advisory`` bars are measured the same way and reported in the verdict's
+    comment (``MET`` / ``MISS``), but are excluded from the verdict: a missed
+    advisory bar never turns a PASSED run into FAILED. A dimension cannot be
+    both required and advisory.
 
     Usage:
         run_evaluators=[usecase_certification_gate({
@@ -587,27 +612,31 @@ def usecase_certification_gate(thresholds: dict):
             "groundedness": 0.80,
             "regulatory_compliance": 1.0,
             "tool_use_correctness": 0.90,
-        })]
+        }, advisory={"completeness": 0.70})]
     """
-    def evaluator(*, item_results, **kwargs):
-        rows = {}
-        for name, thr in thresholds.items():
-            values = [
-                ev.value for result in item_results
-                for ev in result.evaluations
-                if ev.name == name and ev.value is not None
-            ]
-            avg = sum(values) / len(values) if values else 0.0
-            rows[name] = (avg, avg >= thr, thr, len(values))
+    advisory = dict(advisory or {})
+    both = sorted(set(thresholds) & set(advisory))
+    if both:
+        raise ValueError(f"Dimension(s) {both} are both required and advisory; "
+                         f"a bar either blocks or it does not.")
 
+    def evaluator(*, item_results, **kwargs):
+        rows = measure_bars(thresholds, item_results)
         passed = all(ok for _, ok, _, _ in rows.values())
         detail = ", ".join(
             f"{name}={avg:.0%}{'PASS' if ok else 'FAIL'}(>={thr:.0%})"
             for name, (avg, ok, thr, _) in rows.items()
         )
+        comment = f"{'PASSED' if passed else 'FAILED'} - {detail}"
+        if advisory:
+            notes = ", ".join(
+                f"{name}={avg:.0%}{'MET' if ok else 'MISS'}(>={thr:.0%})"
+                for name, (avg, ok, thr, _) in measure_bars(advisory, item_results).items()
+            )
+            comment += f" | advisory, does not block: {notes}"
         return Evaluation(
             name="certification_result", data_type="BOOLEAN",
             value=1.0 if passed else 0.0,
-            comment=f"{'PASSED' if passed else 'FAILED'} - {detail}",
+            comment=comment,
         )
     return evaluator

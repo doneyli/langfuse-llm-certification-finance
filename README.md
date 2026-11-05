@@ -451,16 +451,16 @@ Langfuse is the source of truth for the evidence:
 
 - **Every gate run is an Experiment** (Langfuse UI → **Experiments**, or the URL the runner prints). Compare runs side by side against a baseline there.
 - **Item-level scores** (numerical_accuracy, groundedness, etc.) are attached to each experiment item and visible per item in the experiment view.
-- **Run-level scores** (`certification_result`, `avg_numerical_accuracy`, `avg_groundedness`, …) are stored **on the experiment itself** by the Langfuse SDK (`run_evaluators`) — no extra write. Read them with `GET /api/public/experiments?fields=scores` (what the portal and `export_results.py` do).
+- **Run-level scores** (`certification_result`, `avg_numerical_accuracy`, `avg_groundedness`, …) are stored **on the experiment itself** by the Langfuse SDK (`run_evaluators`) — no extra write. Read them with `GET /api/public/experiments?fields=scores` (what the portal and `export_results.py` do), or with `GET /api/public/v3/scores?experimentId=<experiment id>`: the SDK writes them with `datasetRunId` set to the experiment id, which is the field that filter matches. Re-posting them with a `traceId` (this repo's old `persist_run_evaluations` helper did, even on SDK 3.14 where it was already a duplicate) files a second copy as an item score of one trace, invisible to that filter. Details in [`cicd/README.md`](cicd/README.md#the-verdict-is-a-boolean-score).
 - **Pass/fail scores are BOOLEAN.** The gate verdict `certification_result` and the binary item checks (`regulatory_compliance`, `tool_use_correctness`, `numerical_accuracy`, `exact_match`, `sentiment_accuracy`) are written as Langfuse BOOLEAN scores (`true`/`false`); `groundedness`, `completeness` and every `avg_*` stay NUMERIC. That unlocks boolean dashboard widgets and **alerts on the true-rate** (e.g. notify when `regulatory_compliance` drops below 100%), and Score Analytics confusion matrices against human labels. A project that registered these configs as NUMERIC before can migrate with `setup_score_configs.py --migrate-configs` (archives the old config, creates the BOOLEAN one; run `--dry-run` first).
 - **Agent traces render as an Agent Graph.** Each item runs inside one `usecase:<name>` agent observation, with `retriever`, `tool` and `guardrail` steps beneath it, and generations compiled from a managed prompt are linked to that prompt version (Prompts → Metrics shows scores, latency and cost per version).
-- **The bars a run was judged against** are recorded in the experiment's metadata (`gate_thresholds` for agent runs, `threshold` + `gate` for model runs). Runs recorded before the SDK v5 upgrade carry no metadata in the v4 API, so the portal shows their verdict without a bar.
+- **The bars a run was judged against** are recorded in the experiment's metadata (`gate_thresholds` for agent runs, `threshold` + `gate` for model runs). An agent run's advisory bars go under their own key, `advisory_thresholds`, so nothing that replays a verdict can mistake them for gate bars. Runs recorded before the SDK v5 upgrade carry no metadata in the v4 API, so the portal shows their verdict without a bar.
 
 ### `export_results.py` — Evidence exporter
 
 Exports experiment scores as a reviewable evidence pack for compliance/AMRM report generation.
 
-The pack's **Gate** row names the bars the run was actually judged by, read from the run's own metadata — `numerical_accuracy ≥ 85%` for a model run, every dimension (`all must clear: …`) for an agent run, and `—` for a run that recorded no bar. It shares that rule with the portal (`cert_common.recorded_gate`), so the two can never report different bars for the same run.
+The pack's **Gate** row names the bars the run was actually judged by, read from the run's own metadata — `numerical_accuracy ≥ 85%` for a model run, every dimension (`all must clear: …`) for an agent run, and `—` for a run that recorded no bar. Advisory bars get an **Advisory** row of their own, never the Gate row, and the Scores Summary's **Bar** column marks each evaluator `PASS`/`FAIL` against a required bar, `MET`/`MISS (advisory)` against an advisory one, or `—`. It shares those rules with the portal (`cert_common.recorded_gate`, `recorded_advisory`, `bar_verdict`), so the two can never report different bars for the same run.
 
 ```
 Options:
@@ -475,7 +475,7 @@ Options:
 Beyond gating *models*, the pipeline can gate **AI agents** — multi-step
 systems deployed for a specific business purpose. An agent clears the gate only
 if the **whole system** passes every production-readiness bar at
-once — a **multi-dimensional gate** where every dimension must pass, not just a
+once — a **multi-dimensional gate** where every required dimension must pass, not just a
 single accuracy score.
 
 | | Model gate | AI agent gate |
@@ -492,17 +492,26 @@ Which dimensions an agent gates on is a property of the agent; the thresholds
 themselves live in [`cicd/thresholds.json`](cicd/thresholds.json), never in a CLI
 flag:
 
-| Agent | Steps (spans) | Gate — all must pass |
+| Agent | Steps (spans) | Gate: every required bar must pass (advisory bars are reported, never block) |
 |----------|--------------------|----------------------|
 | `10k-analyst` — grounded SEC-filing QA with a calculator tool | plan → retrieve-evidence → calculate (tool) → compose-answer | numerical_accuracy ≥ 0.85, groundedness ≥ 0.80, regulatory_compliance = 1.00, tool_use_correctness ≥ 0.90 |
 | `sentiment-triage` — classify sentiment, route low-confidence items to a human | classify → rationale → route (tool) | sentiment_accuracy ≥ 0.85, regulatory_compliance = 1.00, tool_use_correctness = 1.00 |
-| `advisory-draft` — grounded client summary with a hard compliance gate | analyze → draft → compliance-self-check (tool) | groundedness ≥ 0.80, regulatory_compliance = 1.00, completeness ≥ 0.70, tool_use_correctness = 1.00 |
+| `advisory-draft` — grounded client summary with a hard compliance gate | analyze → draft → compliance-self-check (tool) | groundedness ≥ 0.80, regulatory_compliance = 1.00, tool_use_correctness = 1.00; *advisory:* completeness ≥ 0.70 |
 
 Note how the gates differ per agent: `sentiment-triage` has no groundedness
 dimension (no source documents to be faithful to), and `advisory-draft` has no
-accuracy dimension at all — it gates on grounded, complete, *compliant* prose.
+accuracy dimension at all — it gates on grounded, *compliant* prose.
 `regulatory_compliance = 1.00` is a hard gate everywhere: one prohibited phrase
 fails the entire run.
+
+A bar can also be **advisory**: `{"threshold": 0.70, "required": false}` in
+`cicd/thresholds.json`. An advisory bar is measured and reported (its `avg_<dim>`
+score, `MET`/`MISS` in the `certification_result` comment, the runner summary,
+`advisory_thresholds` in the experiment metadata) but never fails the run or the
+`--ci` exit code. `advisory-draft`'s completeness is advisory because it is a
+length and structure heuristic, not a correctness or safety property. An agent
+must keep at least one required bar, or it raises at import. See
+[Required bars and advisory bars](cicd/README.md#required-bars-and-advisory-bars).
 
 ```bash
 uv run python run_usecase_certification.py --list           # list registered agents
@@ -521,13 +530,13 @@ Options:
   --max-concurrency N           Concurrent items (default: 5)
   --run-name NAME               Custom experiment run name (default: auto-generated)
   --queue-failures              Route failed items to the annotation queue
-  --ci                          Exit 1 unless every gate dimension passes (for CI)
+  --ci                          Exit 1 unless every required gate dimension passes (for CI)
   --dry-run                     Preview dataset items only
 ```
 
 `run_usecase_certification.py` runs a Langfuse dataset through a registered
 multi-step **agent** (nested trace, one span per step) and applies that agent's
-**multi-dimensional gate** — every dimension must pass.
+**multi-dimensional gate** — every required dimension must pass.
 
 The shared foundation (multi-dimensional gate, trajectory evaluator, agent
 registry, tracing helpers) plus all three agents are on `main`. See:
@@ -550,7 +559,7 @@ The UI is a React SPA built with [Click UI](https://clickhouse.design/click-ui),
 
 The dashboard is a **latest-run-per-(dataset, model) matrix**: for each dataset it shows the newest run of every `metadata.model` value — plain models, `--label` variants (e.g. `claude-opus-4-7-finance-expert`), and agents (`usecase:10k-analyst`) each get their own row. Each row's *primary score* is picked per run — `avg_numerical_accuracy` if present, else `avg_sentiment_accuracy`, `avg_groundedness`, `avg_exact_match`, `avg_completeness`, or the first other `avg_*` score — and labeled with the metric name.
 
-The **Threshold** column shows the bar that run was judged against, read from the run's own metadata so a historical run displays the bar that was in force when it ran, not whatever the gate config says today. A model run records one bar for one score (`metadata.threshold` plus `metadata.gate`, the score it judged) — that bar belongs to that score only, never to the run's other evaluators. An agent run records one bar per dimension (`metadata.gate_thresholds`) and *all* of them must clear, so the column shows the bar for the score in that row plus a link, `of 4 gate dims`, to **Details**, which lists every evaluator against its own bar (`—` for one the gate never judged). A run that recorded no bar shows `—` rather than a number nothing was judged against. The **History** trend draws a single reference line only when every plotted run shares the same metric and bar; otherwise each point's own bar is in its tooltip.
+The **Threshold** column shows the bar that run was judged against, read from the run's own metadata so a historical run displays the bar that was in force when it ran, not whatever the gate config says today. A model run records one bar for one score (`metadata.threshold` plus `metadata.gate`, the score it judged) — that bar belongs to that score only, never to the run's other evaluators. An agent run records one bar per dimension (`metadata.gate_thresholds`) and *all* of them must clear, so the column shows the bar for the score in that row plus a link, `of 4 gate dims`, to **Details**, which lists every evaluator against its own bar (`—` for one the gate never judged). Advisory bars are counted apart (`of 3 gate dims + 1 advisory`), and on **Details** an advisory bar is labelled `advisory` and a miss is drawn amber, never red, because it did not decide the run's status. A run that recorded no bar shows `—` rather than a number nothing was judged against. The **History** trend draws a single reference line only when every plotted run shares the same metric and bar; otherwise each point's own bar is in its tooltip.
 
 ### Running the portal
 
@@ -825,8 +834,9 @@ lives in [`cicd/thresholds.json`](cicd/thresholds.json), not in the agent
 modules. Loosening a bar is therefore a reviewable diff in a pull request, and
 [`cicd/README.md`](cicd/README.md) explains the hard-vs-loose split, what no bar
 covers (persona and tone are not gated), and why a missing entry raises rather
-than defaulting — `usecase_certification_gate` is `all()` over the dimensions it
-is given, so an empty gate would certify everything as PASSED.
+than defaulting — `usecase_certification_gate` is `all()` over the required
+dimensions it is given, so an empty gate, or one whose bars are all advisory,
+would certify everything as PASSED.
 `tests/test_gate_thresholds.py` fails on any drift between the file and the agent
 registry, and on a gated dimension that no evaluator produces.
 
@@ -849,7 +859,7 @@ uv run pytest --ignore=tests/test_certification.py -v
 | `test_promote_trace_to_dataset.py` | Loop Edge A: deterministic `prod-<traceId>` ids, never-copy-suspect-output guard |
 | `test_recert_for_prompt.py` | Loop Edge B: prompt→target routing, `--ci` wiring, drift guard vs `setup_prompts.py`, skip-vs-pass job summary |
 | `test_gate_thresholds.py` | The quality bar: registry↔`cicd/thresholds.json` drift, every gated dimension has an evaluator, a missing bar raises instead of certifying everything |
-| `test_portal_thresholds.py` | Reading a run's recorded gate (portal + evidence pack): a model bar lands only on its judged score, no invented or fallback bars, verdicts use unrounded means, legacy inference stays in step with `select_evaluators` |
+| `test_portal_thresholds.py` | Reading a run's recorded gate (portal + evidence pack): a model bar lands only on its judged score, no invented or fallback bars, verdicts use unrounded means, legacy inference stays in step with `select_evaluators`, advisory bars are shown met/missed but never feed status or the Gate row |
 
 **Live gate** — `tests/test_certification.py` runs real experiments and asserts pass/fail. Requires Langfuse credentials, `ANTHROPIC_API_KEY`, and seeded datasets; it runs in the `certification.yml` workflow, not on PRs:
 

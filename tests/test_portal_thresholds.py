@@ -7,19 +7,29 @@ was judged against, and three producers record it in two shapes:
   * run_certification.py         -> metadata.threshold + metadata.gate
   * tests/test_certification.py  -> metadata.threshold + metadata.gate
   * run_usecase_certification.py -> metadata.gate_thresholds (one bar per
-                                    dimension, all of which must clear)
+                                    dimension, all of which must clear), plus
+                                    metadata.advisory_thresholds (reported,
+                                    never part of the verdict)
 
-cert_common.recorded_gate() is the one rule both readers share. These tests pin
-it so no reader can again fall back to a hardcoded 85% the gate never enforced,
-or apply a model gate's single bar to evaluators that bar never judged.
+cert_common.recorded_gate() and recorded_advisory() are the rules both readers
+share. These tests pin them so no reader can again fall back to a hardcoded 85%
+the gate never enforced, apply a model gate's single bar to evaluators that bar
+never judged, or let an advisory bar look like (or act like) a gate bar.
 
 They run without Langfuse credentials or any LLM calls.
 """
 
 import pytest
 
-from agents.advisory_draft import GATE_ADVISORY_DRAFT
-from cert_common import MODEL_GATE_SCORES, describe_gate, recorded_gate
+from agents.advisory_draft import ADVISORY_BARS_ADVISORY_DRAFT, GATE_ADVISORY_DRAFT
+from cert_common import (
+    MODEL_GATE_SCORES,
+    bar_verdict,
+    describe_advisory,
+    describe_gate,
+    recorded_advisory,
+    recorded_gate,
+)
 from export_results import format_markdown
 from portal.langfuse_client import (
     replay_gate,
@@ -29,13 +39,20 @@ from portal.langfuse_client import (
 
 
 # What run_usecase_certification.py records for the advisory agent: the
-# registry's own gate dict. Built from the registry rather than copied, so a
-# bar edited in cicd/thresholds.json flows through instead of failing here.
+# registry's own required and advisory dicts, under separate keys. Built from
+# the registry rather than copied, so a bar edited in cicd/thresholds.json flows
+# through instead of failing here.
 ADVISORY_META = {
     "model": "usecase:advisory-draft",
     "use_case": "advisory-draft",
     "gate_thresholds": dict(GATE_ADVISORY_DRAFT),
+    "advisory_thresholds": dict(ADVISORY_BARS_ADVISORY_DRAFT),
 }
+
+# The shipped file must keep at least one advisory bar on this agent, or every
+# advisory test below would pass vacuously.
+assert ADVISORY_BARS_ADVISORY_DRAFT, "advisory-draft has no advisory bar to test"
+ADVISORY_DIM = next(iter(ADVISORY_BARS_ADVISORY_DRAFT))
 
 MODEL_META = {"model": "claude-sonnet-4-6", "threshold": 0.85,
               "gate": "numerical_accuracy"}
@@ -186,7 +203,9 @@ class TestSummarizeRun:
         for dim, bar in GATE_ADVISORY_DRAFT.items():
             assert aggs[dim]["bar"] == float(bar)
             assert aggs[dim]["cleared"] is True
+            assert aggs[dim]["advisory"] is False
         assert aggs["exact_match"]["bar"] is None
+        assert aggs["exact_match"]["advisory"] is False
         assert summary["threshold"] is None
         assert summary["gate_thresholds"] == recorded_gate(ADVISORY_META)
 
@@ -241,3 +260,103 @@ class TestEvidencePack:
     def test_run_with_no_bar_says_so(self):
         report = self._pack({"model": "legacy"}, ["regulatory_compliance"])
         assert "no bar recorded" in report
+
+
+class TestAdvisoryBarsAreShownNotJudged:
+    """Advisory bars are reported with their own met/missed state, recorded
+    apart from the gate, and never feed a run's status or the Gate row."""
+
+    def test_recorded_advisory_reads_its_own_key(self):
+        assert recorded_advisory(ADVISORY_META) == {
+            k: float(v) for k, v in ADVISORY_BARS_ADVISORY_DRAFT.items()}
+        # ...and the gate never picks it up.
+        assert ADVISORY_DIM not in recorded_gate(ADVISORY_META)
+
+    def test_sdk_v5_flattened_metadata_is_read(self):
+        # /experiments returns metadata flattened with every leaf stringified.
+        meta = {"gate_thresholds.groundedness": "0.8",
+                "advisory_thresholds.completeness": "0.7"}
+        assert recorded_advisory(meta) == {"completeness": 0.7}
+        assert recorded_gate(meta) == {"groundedness": 0.8}
+
+    @pytest.mark.parametrize("meta", [
+        {"gate_thresholds": {"groundedness": 0.8}},          # pre-tier run
+        {"advisory_thresholds": "0.7"},
+        {"advisory_thresholds": {"completeness": True}},
+        {"advisory_thresholds": {}},
+        None,
+    ])
+    def test_no_usable_advisory_bars_is_none(self, meta):
+        assert recorded_advisory(meta) is None
+
+    def test_a_name_that_is_also_required_is_judged_by_the_required_bar(self):
+        meta = {"gate_thresholds": {"groundedness": 0.8},
+                "advisory_thresholds": {"groundedness": 0.5, "completeness": 0.7}}
+        assert recorded_advisory(meta) == {"completeness": 0.7}
+        assert bar_verdict("groundedness", 0.6, {"groundedness": 0.8},
+                           {"groundedness": 0.5}) == {
+            "bar": 0.8, "cleared": False, "advisory": False}
+
+    def test_describe_advisory(self):
+        assert describe_advisory({"completeness": 0.7}) == (
+            "completeness ≥ 70% (reported, never blocks)")
+        assert describe_advisory(None) == ""
+
+    def test_advisory_miss_is_flagged_and_does_not_fail_a_replayed_run(self):
+        # No persisted certification_result, so status is replayed from the
+        # recorded bars: the advisory miss must not turn it FAILED.
+        totals = {dim: [1.0, 1.0] for dim in GATE_ADVISORY_DRAFT}
+        totals[ADVISORY_DIM] = [0.0, 0.1]
+        summary = summarize_run(totals, ADVISORY_META)
+        agg = summary["aggregates"][ADVISORY_DIM]
+        assert agg["bar"] == float(ADVISORY_BARS_ADVISORY_DRAFT[ADVISORY_DIM])
+        assert agg["advisory"] is True
+        assert agg["cleared"] is False
+        assert summary["status"] == "PASSED"
+        assert summary["advisory_thresholds"] == recorded_advisory(ADVISORY_META)
+
+    def test_advisory_met_uses_the_unrounded_mean(self):
+        meta = {"gate_thresholds": {"groundedness": 0.8},
+                "advisory_thresholds": {"completeness": 0.7}}
+        totals = {"groundedness": [1.0],
+                  "completeness": [0.7] * 2499 + [0.0]}   # mean 0.69972
+        agg = summarize_run(totals, meta)["aggregates"]["completeness"]
+        assert agg["mean"] == 0.7                          # display rounding
+        assert agg["cleared"] is False
+
+    def test_evidence_pack_lists_advisory_apart_from_the_gate(self):
+        aggregates = {
+            **{dim: {"mean": 1.0, "min": 1.0, "max": 1.0, "count": 2,
+                     "pass_rate": 1.0,
+                     **bar_verdict(dim, 1.0, GATE_ADVISORY_DRAFT, {})}
+               for dim in GATE_ADVISORY_DRAFT},
+            ADVISORY_DIM: {"mean": 0.35, "min": 0.2, "max": 0.5, "count": 2,
+                           "pass_rate": 0.0,
+                           **bar_verdict(ADVISORY_DIM, 0.35, GATE_ADVISORY_DRAFT,
+                                         ADVISORY_BARS_ADVISORY_DRAFT)},
+        }
+        report = format_markdown({
+            "dataset": "certification/advisory-adversarial",
+            "run_name": "r1", "run_metadata": ADVISORY_META,
+            "run_scores": {"certification_result": {"value": 1.0, "comment": ""}},
+            "exported_at": "2026-11-04T00:00:00", "total_items": 2,
+            "aggregates": aggregates, "items": [],
+        })
+        lines = report.splitlines()
+        gate_row = next(l for l in lines if l.startswith("| **Gate**"))
+        advisory_row = next(l for l in lines if l.startswith("| **Advisory**"))
+        assert ADVISORY_DIM not in gate_row
+        assert f"{ADVISORY_DIM} ≥" in advisory_row and "never blocks" in advisory_row
+        assert "| **Result** | **PASSED** |" in report
+        summary_row = next(l for l in lines if l.startswith(f"| {ADVISORY_DIM} |"))
+        assert "MISS (advisory)" in summary_row
+        required_row = next(l for l in lines if l.startswith("| groundedness |"))
+        assert "PASS" in required_row and "advisory" not in required_row
+
+    def test_evidence_pack_without_advisory_bars_has_no_advisory_row(self):
+        report = format_markdown({
+            "dataset": "certification/fpb-sample", "run_name": "r1",
+            "run_metadata": MODEL_META, "exported_at": "2026-11-04T00:00:00",
+            "total_items": 0, "aggregates": {}, "items": [],
+        })
+        assert "**Advisory**" not in report

@@ -151,8 +151,9 @@ SCORE_CONFIGS = [
         "name": "certification_result",
         "dataType": "BOOLEAN",
         "description": "Deployment gate verdict (run-level, on the experiment): "
-                       "true = PASSED (every gated score met its bar in "
-                       "cicd/thresholds.json), false = FAILED.",
+                       "true = PASSED (every required score met its bar in "
+                       "cicd/thresholds.json; advisory bars never block), "
+                       "false = FAILED.",
     },
     # Human review score configs (for Annotation Queues)
     {
