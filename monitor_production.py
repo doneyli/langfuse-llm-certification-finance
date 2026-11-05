@@ -27,99 +27,124 @@ import argparse
 import json
 import os
 import sys
-import urllib.request
-from datetime import datetime, timedelta, timezone
 
 from evaluators import (
     regulatory_compliance_evaluator,
     response_completeness_evaluator,
 )
-from cert_common import langfuse_creds, queue_trace_ids
+from cert_common import (
+    PAGE_SIZE,
+    iso_utc,
+    langfuse_creds,
+    paginate_cursor,
+    parse_json_field,
+    queue_trace_ids,
+)
 
 
-# --------------- API Helpers ---------------
+# --------------- Langfuse v4 reads ---------------
+#
+# Production "traces" are read as their root observations (GET
+# /v2/observations?isRootObservation=true): in Langfuse v4 a trace's input and
+# output are its root observation's, and the legacy GET /traces endpoint was
+# removed on Langfuse Cloud on 2026-11-16.
 
-def _get_auth():
-    # Delegate to the shared helper so this script honors the same
-    # LANGFUSE_BASE_URL -> LANGFUSE_HOST fallback as the rest of the repo.
-    return langfuse_creds()
+OBSERVATION_FIELDS = "core,basic,io,trace_context"
 
+# Gate runs (run_experiment) land in this environment and are already scored
+# by the gate itself; monitoring them again would double-count.
+EXPERIMENT_ENVIRONMENT = "sdk-experiment"
 
-def _api_get(host, auth, path):
-    req = urllib.request.Request(
-        f"{host}{path}",
-        headers={"Authorization": f"Basic {auth}"},
-    )
-    resp = urllib.request.urlopen(req)
-    return json.loads(resp.read())
-
-
-def _api_post(host, auth, path, body):
-    req = urllib.request.Request(
-        f"{host}{path}",
-        data=json.dumps(body).encode(),
-        headers={
-            "Authorization": f"Basic {auth}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    resp = urllib.request.urlopen(req)
-    return json.loads(resp.read())
+SCORE_LOOKUP_BATCH = 50
 
 
-# --------------- Trace Fetching ---------------
-
-def fetch_traces(host, auth, *, hours=1, tags=None, trace_name=None, limit=100):
-    """Fetch recent traces from Langfuse."""
-    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-
-    params = f"limit={limit}"
-    if tags:
-        for tag in tags:
-            params += f"&tags={tag}"
+def observation_filter(*, tags=None, trace_name=None):
+    """The /v2/observations ``filter`` array for --tags / --trace-name."""
+    filters = []
     if trace_name:
-        params += f"&name={trace_name}"
-
-    data = _api_get(host, auth, f"/api/public/traces?{params}")
-    traces = data.get("data", [])
-
-    # Filter by timestamp (API may not support fromTimestamp directly)
-    filtered = []
-    for t in traces:
-        ts = t.get("timestamp", "")
-        if ts >= since:
-            filtered.append(t)
-
-    return filtered
+        filters.append({"type": "string", "column": "traceName",
+                        "operator": "=", "value": trace_name})
+    if tags:
+        filters.append({"type": "arrayOptions", "column": "tags",
+                        "operator": "any of", "value": list(tags)})
+    return filters
 
 
-def get_scored_trace_ids(host, auth, score_name, trace_ids):
-    """Check which traces already have a specific score."""
-    if not trace_ids:
-        return set()
+def fetch_traces(*, hours=1, tags=None, trace_name=None, limit=100,
+                 include_experiments=False):
+    """Recent production traces, as their root observations.
 
+    Each row carries ``traceId``, ``id`` (the root observation id), ``input``,
+    ``output`` (raw strings), ``traceName``, ``tags`` and ``environment``.
+    """
+    params = {
+        "isRootObservation": True,
+        "fromStartTime": iso_utc(hours_ago=hours),
+        "toStartTime": iso_utc(),
+        "fields": OBSERVATION_FIELDS,
+    }
+    filters = observation_filter(tags=tags, trace_name=trace_name)
+    if filters:
+        params["filter"] = filters
+    rows = paginate_cursor("/api/public/v2/observations", params,
+                           max_pages=max(1, -(-limit // PAGE_SIZE)),
+                           limit=min(limit, PAGE_SIZE))
+    if not include_experiments:
+        rows = [r for r in rows if r.get("environment") != EXPERIMENT_ENVIRONMENT]
+    return rows[:limit]
+
+
+def _score_trace_id(score):
+    subject = score.get("subject") or {}
+    return score.get("traceId") or (subject.get("traceId")
+                                    if isinstance(subject, dict) else None)
+
+
+def get_scored_trace_ids(score_name, trace_ids):
+    """Trace ids (of ``trace_ids``) that already carry ``score_name``.
+
+    One GET /v3/scores per batch of 50 trace ids (comma-separated filter).
+    """
     scored = set()
-    # Fetch scores in batches
-    for tid in trace_ids:
-        data = _api_get(host, auth,
-                        f"/api/public/scores?traceId={tid}&name={score_name}&limit=1")
-        if data.get("data"):
-            scored.add(tid)
-
+    ids = list(dict.fromkeys(t for t in trace_ids if t))
+    for i in range(0, len(ids), SCORE_LOOKUP_BATCH):
+        batch = ids[i:i + SCORE_LOOKUP_BATCH]
+        rows = paginate_cursor("/api/public/v3/scores", {
+            "name": score_name, "traceId": ",".join(batch), "fields": "subject",
+        })
+        scored.update(t for t in map(_score_trace_id, rows) if t)
     return scored
+
+
+def post_score(trace, ev):
+    """Write one evaluation onto the trace's root observation via the SDK."""
+    from langfuse import get_client
+    get_client().create_score(
+        trace_id=trace["traceId"],
+        observation_id=trace.get("id"),
+        name=ev.name,
+        value=ev.value,
+        data_type=getattr(ev, "data_type", None) or "NUMERIC",
+        comment=ev.comment or "",
+    )
 
 
 # --------------- Evaluation ---------------
 
 def evaluate_trace(trace):
-    """Run deterministic evaluators on a trace and return results."""
-    output = trace.get("output")
+    """Run deterministic evaluators on a trace's output and return results.
+
+    v4 returns ``output`` as a raw string. A JSON agent result
+    (``{"answer": ...}``) is scored on its answer text; any other JSON is
+    scored as its serialized form; plain text as-is.
+    """
+    output = parse_json_field(trace.get("output"))
     if not output:
         return []
 
-    # Convert output to string if it's a dict
-    if isinstance(output, dict):
+    if isinstance(output, dict) and isinstance(output.get("answer"), str):
+        output = output["answer"]
+    elif isinstance(output, (dict, list)):
         output = json.dumps(output)
 
     results = []
@@ -149,6 +174,10 @@ def parse_args():
                         help="Filter traces by name")
     parser.add_argument("--limit", type=int, default=100,
                         help="Max traces to process (default: 100)")
+    parser.add_argument("--include-experiments", action="store_true",
+                        help="Also score deployment-gate experiment traces "
+                             f"(environment '{EXPERIMENT_ENVIRONMENT}'; skipped "
+                             "by default — the gate already scored them)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview evaluation without posting scores")
     parser.add_argument("--queue-violations", action="store_true",
@@ -174,7 +203,7 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    host, auth = _get_auth()
+    host, _auth = langfuse_creds()
 
     print("Production Monitor", file=sys.stderr)
     print("=" * 50, file=sys.stderr)
@@ -184,8 +213,9 @@ def main():
     print(f"  Trace name: {args.trace_name or 'any'}", file=sys.stderr)
 
     # Fetch recent traces
-    traces = fetch_traces(host, auth, hours=args.hours, tags=args.tags,
-                          trace_name=args.trace_name, limit=args.limit)
+    traces = fetch_traces(hours=args.hours, tags=args.tags,
+                          trace_name=args.trace_name, limit=args.limit,
+                          include_experiments=args.include_experiments)
     print(f"  Traces:     {len(traces)}", file=sys.stderr)
 
     if not traces:
@@ -193,9 +223,9 @@ def main():
         return
 
     # Find traces that haven't been scored for compliance yet
-    trace_ids = [t["id"] for t in traces]
-    already_scored = get_scored_trace_ids(host, auth, "regulatory_compliance", trace_ids)
-    unscored = [t for t in traces if t["id"] not in already_scored]
+    trace_ids = [t["traceId"] for t in traces]
+    already_scored = get_scored_trace_ids("regulatory_compliance", trace_ids)
+    unscored = [t for t in traces if t["traceId"] not in already_scored]
     print(f"  Unscored:   {len(unscored)}", file=sys.stderr)
 
     if not unscored:
@@ -220,27 +250,25 @@ def main():
 
             if not args.dry_run:
                 try:
-                    _api_post(host, auth, "/api/public/scores", {
-                        "traceId": trace["id"],
-                        "name": ev.name,
-                        "value": ev.value,
-                        "comment": ev.comment or "",
-                        "dataType": "NUMERIC",
-                    })
+                    post_score(trace, ev)
                 except Exception as e:
-                    print(f"  Warning: failed to score {trace['id'][:12]}...: {e}",
+                    print(f"  Warning: failed to score {trace['traceId'][:12]}...: {e}",
                           file=sys.stderr)
                     continue
 
             # Track violations
             if ev.name == "regulatory_compliance" and ev.value == 0.0:
                 violations += 1
-                violation_trace_ids.append(trace["id"])
-                trace_url = trace.get("htmlPath", f"{host}/trace/{trace['id']}")
+                violation_trace_ids.append(trace["traceId"])
+                trace_url = f"{host}/trace/{trace['traceId']}"
                 print(f"  VIOLATION: {ev.comment}", file=sys.stderr)
                 print(f"    Trace: {trace_url}", file=sys.stderr)
 
         scored += 1
+
+    if scored and not args.dry_run:
+        from langfuse import get_client
+        get_client().flush()
 
     # Summary
     print(f"\n{'=' * 50}", file=sys.stderr)

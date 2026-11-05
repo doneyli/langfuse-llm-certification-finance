@@ -1,20 +1,28 @@
 """
 Langfuse data layer for the Certification Portal.
 
-Fetches experiment data from Langfuse, aggregates scores, and caches results.
+Fetches experiment data from Langfuse (v4 read API: /experiments and
+/experiment-items), aggregates scores, and caches results.
 """
 
-import base64
-import json
 import logging
 import os
 import urllib.parse
-import urllib.request
 
 from cachetools import TTLCache
-from langfuse import Langfuse
 
-from cert_common import recorded_gate
+from cert_common import (
+    MAX_PAGES,
+    PAGE_SIZE,
+    api_get,
+    langfuse_creds,
+    lookback_from_env,
+    normalize_run_metadata,
+    paginate_cursor,
+    parse_json_field,
+    recorded_gate,
+    score_value,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -36,8 +44,19 @@ FALLBACK_DATASETS = [
 ]
 
 # Run-level score names that must not be counted as per-item scores.
-# Any `avg_*` score is also run-level (see cert_common.persist_run_evaluations).
+# Any `avg_*` score is also run-level: the SDK writes run_evaluators results
+# onto the experiment itself (GET /experiments?fields=scores).
 RUN_LEVEL_SCORES = {"certification_result"}
+
+# Use-case slugs the agent runner prefixes run names with (see
+# run_usecase_certification.KNOWN_USE_CASES), and the dataset tokens run names
+# carry — used only to recover a row key for runs recorded without metadata.
+KNOWN_USE_CASES = ("10k-analyst", "sentiment-triage", "advisory-draft")
+DATASET_TOKENS = ("financebench", "fpb", "advisory")
+
+# Runs named with these prefixes are disposable (scripts/spike_span_nesting.py)
+# and never shown.
+HIDDEN_RUN_PREFIXES = ("spike-",)
 
 # Fallback chain for a row's "primary score": the first of these avg_* scores
 # present on a run wins; otherwise the first other avg_* score (alphabetical);
@@ -70,7 +89,7 @@ def resolve_run_thresholds(meta, primary_score_name=None, score_names=()):
     gate = recorded_gate(meta, score_names)
     if not gate:
         return None, None
-    is_agent = (meta or {}).get("gate_thresholds") is not None
+    is_agent = normalize_run_metadata(meta).get("gate_thresholds") is not None
     if primary_score_name is not None:
         threshold = gate.get(primary_score_name.removeprefix("avg_"))
     else:
@@ -149,50 +168,37 @@ def summarize_run(score_totals, meta, cert_value=None):
 
 
 class PortalClient:
-    """Fetches and aggregates certification data from Langfuse."""
+    """Fetches and aggregates deployment-gate data from Langfuse.
+
+    Reads only the Langfuse v4 API: datasets from ``/v2/datasets``, gate runs
+    from ``/experiments`` (run-level scores — ``certification_result`` and every
+    ``avg_*`` — are the experiment's own scores), and per-item results from
+    ``/experiment-items``. No trace fetches, no SDK dataset fetch.
+    """
 
     def __init__(self):
-        host = os.getenv("LANGFUSE_BASE_URL",
-                         os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"))
-        pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-        sk = os.getenv("LANGFUSE_SECRET_KEY", "")
-
+        host, auth = langfuse_creds()
         self.host = host
-        self._auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
-        self._sdk = Langfuse(public_key=pk, secret_key=sk, host=host)
+        self._auth = auth
 
-    # Langfuse REST API enforces max limit=100 per page and returns
-    # {"data": [...], "meta": {"page", "limit", "totalItems", "totalPages"}}.
-    # Keep a hard ceiling on pages as a circuit breaker against misconfigured
-    # queries fanning into thousands of requests.
-    PAGE_SIZE = 100
-    MAX_PAGES = 100  # => 10k items max per paginated call
+    # /v2/datasets is page-based ({"meta": {"page", "totalPages"}}); the v4
+    # experiment endpoints are cursor-based (cert_common.paginate_cursor).
+    PAGE_SIZE = PAGE_SIZE
+    MAX_PAGES = MAX_PAGES
 
-    def _api_get(self, path):
-        req = urllib.request.Request(
-            f"{self.host}{path}",
-            headers={"Authorization": f"Basic {self._auth}"},
-        )
-        resp = urllib.request.urlopen(req)
-        return json.loads(resp.read())
+    def _api_get(self, path, params=None):
+        return api_get(path, params, host=self.host, auth=self._auth)
 
     def _paginate(self, path):
-        """Fetch all pages of a Langfuse list endpoint.
-
-        `path` may include query params; page/limit are appended by this helper.
-        Returns the concatenated `data` array.
-        """
-        sep = "&" if "?" in path else "?"
+        """Fetch all pages of a page-numbered list endpoint (/v2/datasets)."""
         out = []
         page = 1
         while page <= self.MAX_PAGES:
-            resp = self._api_get(f"{path}{sep}limit={self.PAGE_SIZE}&page={page}")
+            resp = self._api_get(path, {"limit": self.PAGE_SIZE, "page": page})
             batch = resp.get("data", []) or []
             out.extend(batch)
-            meta = resp.get("meta") or {}
-            total_pages = meta.get("totalPages")
+            total_pages = (resp.get("meta") or {}).get("totalPages")
             if total_pages is None:
-                # No meta -> fall back to "stop when batch is short"
                 if len(batch) < self.PAGE_SIZE:
                     break
             elif page >= total_pages:
@@ -200,91 +206,89 @@ class PortalClient:
             page += 1
         return out
 
+    def _paginate_cursor(self, path, params):
+        return paginate_cursor(path, params, host=self.host, auth=self._auth)
+
     # ---- Helpers ----
 
-    def _get_runs_for_dataset(self, dataset_name):
-        """Fetch all runs for a dataset via paginated REST API."""
-        encoded = urllib.parse.quote(dataset_name, safe="")
-        try:
-            return self._paginate(f"/api/public/datasets/{encoded}/runs")
-        except Exception as exc:
-            logger.warning("Failed to fetch runs for dataset %s (%s); "
-                           "treating as no runs", dataset_name, exc)
-            return []
-
-    def _get_scores_by_name(self, name):
-        """Fetch all scores with a given name (paginated)."""
-        try:
-            return self._paginate(f"/api/public/scores?name={urllib.parse.quote(name)}")
-        except Exception as exc:
-            logger.warning("Failed to fetch scores named %s (%s); "
-                           "treating as no scores", name, exc)
-            return []
-
-    def _get_trace(self, trace_id):
-        """Fetch a trace by ID."""
-        try:
-            return self._api_get(f"/api/public/traces/{trace_id}")
-        except Exception as exc:
-            logger.warning("Failed to fetch trace %s (%s)", trace_id, exc)
-            return None
-
-    def _build_cert_index(self):
-        """Build an index of run_name -> {cert_value, cert_comment, avg_* scores}.
-
-        Run-level scores (certification_result + every avg_*) are all attached
-        to the same summary trace (see cert_common.persist_run_evaluations), so
-        after resolving an anchor score's trace we harvest every run-level
-        score riding on it — including avg_* names we don't know in advance
-        (e.g. avg_regulatory_compliance from the advisory use case).
-        """
-        key = "cert_index"
+    def _dataset_ids(self):
+        """{dataset name: id} for every dataset in the project (cached)."""
+        key = "dataset_ids"
         if key in _cache:
             return _cache[key]
+        try:
+            ids = {d.get("name"): d.get("id")
+                   for d in self._paginate("/api/public/v2/datasets")}
+        except Exception as exc:
+            logger.warning("Failed to list datasets (%s)", exc)
+            return {}
+        _cache[key] = ids
+        return ids
 
-        index = {}       # run_name -> {cert_value, cert_comment, avg_*: value}
-        trace_memo = {}  # trace_id -> trace (avoid re-fetching shared traces)
-        harvested = set()
+    def _dataset_id(self, dataset_name):
+        ds_id = self._dataset_ids().get(dataset_name)
+        if ds_id:
+            return ds_id
+        try:
+            encoded = urllib.parse.quote(dataset_name, safe="")
+            return self._api_get(f"/api/public/v2/datasets/{encoded}").get("id")
+        except Exception as exc:
+            logger.warning("Dataset %s not found (%s)", dataset_name, exc)
+            return None
 
-        anchor_names = ["certification_result"] + PRIMARY_SCORE_CHAIN
-        for anchor in anchor_names:
-            for s in self._get_scores_by_name(anchor):
-                trace_id = s.get("traceId")
-                if not trace_id:
-                    continue
-                if trace_id not in trace_memo:
-                    trace_memo[trace_id] = self._get_trace(trace_id)
-                trace = trace_memo[trace_id]
-                if not trace:
-                    continue
-                meta = trace.get("metadata") or {}
-                run_name = meta.get("experiment_run_name", "")
-                if not run_name:
-                    continue
-                entry = index.setdefault(run_name, {})
+    def _get_experiments(self, dataset_name, run_name=None):
+        """The dataset's experiments (gate runs), each normalized by _experiment_row."""
+        key = f"experiments:{dataset_name}:{run_name or ''}"
+        if key in _cache:
+            return _cache[key]
+        ds_id = self._dataset_id(dataset_name)
+        if not ds_id:
+            return []
+        params = {"datasetId": ds_id, "fromStartTime": lookback_from_env(),
+                  "fields": "core,metadata,scores"}
+        if run_name:
+            params["name"] = run_name
+        try:
+            raw = self._paginate_cursor("/api/public/experiments", params)
+        except Exception as exc:
+            logger.warning("Failed to fetch experiments for dataset %s (%s); "
+                           "treating as no runs", dataset_name, exc)
+            return []
+        rows = [self._experiment_row(e) for e in raw
+                if not (e.get("name") or "").startswith(HIDDEN_RUN_PREFIXES)]
+        _cache[key] = rows
+        return rows
 
-                # The anchor score itself (authoritative value from /scores).
-                if anchor == "certification_result":
-                    entry["cert_value"] = s.get("value")
-                    entry["cert_comment"] = s.get("comment", "") or ""
-                else:
-                    entry[anchor] = s.get("value")
+    @staticmethod
+    def _experiment_row(exp):
+        """One experiment as {id, name, ts, meta, cert}.
 
-                # Harvest every run-level score on the same trace once —
-                # this picks up avg_* names outside the anchor list.
-                if trace_id in harvested:
-                    continue
-                harvested.add(trace_id)
-                for ts in trace.get("scores", []) or []:
-                    name = ts.get("name") or ""
-                    if name == "certification_result":
-                        entry.setdefault("cert_value", ts.get("value"))
-                        entry.setdefault("cert_comment", ts.get("comment", "") or "")
-                    elif name.startswith("avg_"):
-                        entry.setdefault(name, ts.get("value"))
+        ``cert`` holds the run-level scores: ``cert_value`` / ``cert_comment``
+        from ``certification_result`` (BOOLEAN or legacy NUMERIC, coerced to
+        1.0/0.0), plus every ``avg_*`` value.
+        """
+        cert = {}
+        for s in exp.get("scores") or []:
+            name = s.get("name") or ""
+            if name == "certification_result":
+                cert["cert_value"] = score_value(s)
+                cert["cert_comment"] = s.get("comment") or ""
+            elif name.startswith("avg_"):
+                cert[name] = score_value(s)
+        return {
+            "id": exp.get("id"),
+            "name": exp.get("name", ""),
+            "ts": exp.get("startTime") or exp.get("createdAt") or "",
+            "meta": normalize_run_metadata(exp.get("metadata")),
+            "cert": cert,
+        }
 
-        _cache[key] = index
-        return index
+    @staticmethod
+    def _status(cert):
+        cert_value = cert.get("cert_value")
+        if cert_value is None:
+            return "UNKNOWN"
+        return "PASSED" if cert_value == 1.0 else "FAILED"
 
     @staticmethod
     def _pick_primary_score(cert):
@@ -304,11 +308,25 @@ class PortalClient:
 
     @staticmethod
     def _parse_model_from_run_name(name):
+        """Best-effort dashboard row key for a run that recorded no metadata.
+
+        Runs recorded by SDK 3.x come back from /experiments with ``{}``
+        metadata, so the row key is recovered from the run name the runners
+        generate: ``<use-case>-<model>-<dataset>-<ts>`` (agent gate, keyed
+        ``usecase:<use-case>`` exactly as the runner records it) or
+        ``<model>-<dataset>-<ts>`` (model gate).
+        """
+        for use_case in KNOWN_USE_CASES:
+            if name.startswith(use_case + "-"):
+                return f"usecase:{use_case}"
         parts = name.split("-")
         for i, p in enumerate(parts):
-            if p in ("financebench", "fpb"):
+            if p in DATASET_TOKENS:
                 return "-".join(parts[:i])
         return name
+
+    def _model_of(self, row):
+        return row["meta"].get("model") or self._parse_model_from_run_name(row["name"])
 
     # ---- Public methods ----
 
@@ -342,6 +360,7 @@ class PortalClient:
             )
             return list(FALLBACK_DATASETS)
 
+        _cache["dataset_ids"] = {d.get("name"): d.get("id") for d in data}
         names = sorted(
             d.get("name", "") for d in data
             if (d.get("name") or "").startswith(prefix)
@@ -349,59 +368,44 @@ class PortalClient:
         _cache[key] = names
         return names
 
+    def _summary_row(self, row):
+        """Fields shared by dashboard and history rows."""
+        cert = row["cert"]
+        primary = self._pick_primary_score(cert)
+        threshold, gate = resolve_run_thresholds(
+            row["meta"], primary["name"], _run_score_names(cert))
+        return {
+            "model": self._model_of(row),
+            "status": self._status(cert),
+            "primary_score": primary,
+            "threshold": threshold,
+            "gate_thresholds": gate,
+            "run_name": row["name"],
+            "cert_comment": cert.get("cert_comment", ""),
+        }
+
     def get_dashboard_data(self):
-        """Get certification status for all model x dataset combinations."""
+        """Get gate status for all model x dataset combinations."""
         key = "dashboard"
         if key in _cache:
             return _cache[key]
 
-        cert_index = self._build_cert_index()
         rows = []
-
         for ds_name in self.list_datasets():
-            runs = self._get_runs_for_dataset(ds_name)
-            if not runs:
-                continue
-
-            # Group by model, pick latest
             model_latest = {}
-            for r in runs:
-                meta = r.get("metadata") or {}
-                model = meta.get("model", self._parse_model_from_run_name(r.get("name", "")))
+            for row in self._get_experiments(ds_name):
+                model = self._model_of(row)
                 if not model:
                     continue
-                ts = r.get("createdAt", "")
-                if model not in model_latest or ts > model_latest[model]["ts"]:
-                    model_latest[model] = {"ts": ts, "run": r}
+                if model not in model_latest or row["ts"] > model_latest[model]["ts"]:
+                    model_latest[model] = row
 
-            for model, info in model_latest.items():
-                r = info["run"]
-                meta = r.get("metadata") or {}
-                run_name = r.get("name", "")
-                cert = cert_index.get(run_name, {})
-
-                cert_value = cert.get("cert_value")
-
-                if cert_value is not None:
-                    status = "PASSED" if cert_value == 1.0 else "FAILED"
-                else:
-                    status = "UNKNOWN"
-
-                primary = self._pick_primary_score(cert)
-                threshold, gate = resolve_run_thresholds(
-                    meta, primary["name"], _run_score_names(cert))
-
+            for row in model_latest.values():
                 rows.append({
-                    "model": model,
+                    **self._summary_row(row),
                     "dataset": ds_name,
                     "dataset_short": ds_name.split("/")[-1],
-                    "status": status,
-                    "primary_score": primary,
-                    "threshold": threshold,
-                    "gate_thresholds": gate,
-                    "run_name": run_name,
-                    "timestamp": info["ts"][:10] if info["ts"] else "",
-                    "cert_comment": cert.get("cert_comment", ""),
+                    "timestamp": row["ts"][:10],
                 })
 
         rows.sort(key=lambda x: (x["dataset"], x["model"]))
@@ -413,40 +417,13 @@ class PortalClient:
         return self._collect_run_data(dataset_name, run_name)
 
     def get_history(self, dataset_name):
-        """Get all runs for a dataset with certification results."""
+        """Get all runs for a dataset with gate results."""
         key = f"history:{dataset_name}"
         if key in _cache:
             return _cache[key]
 
-        runs_raw = self._get_runs_for_dataset(dataset_name)
-        cert_index = self._build_cert_index()
-
-        runs = []
-        for r in runs_raw:
-            meta = r.get("metadata") or {}
-            run_name = r.get("name", "")
-            cert = cert_index.get(run_name, {})
-
-            cert_value = cert.get("cert_value")
-            status = "UNKNOWN"
-            if cert_value is not None:
-                status = "PASSED" if cert_value == 1.0 else "FAILED"
-
-            primary = self._pick_primary_score(cert)
-            threshold, gate = resolve_run_thresholds(
-                meta, primary["name"], _run_score_names(cert))
-
-            runs.append({
-                "run_name": run_name,
-                "model": meta.get("model", self._parse_model_from_run_name(run_name)),
-                "status": status,
-                "primary_score": primary,
-                "threshold": threshold,
-                "gate_thresholds": gate,
-                "timestamp": r.get("createdAt", "")[:19],
-                "cert_comment": cert.get("cert_comment", ""),
-            })
-
+        runs = [{**self._summary_row(row), "timestamp": row["ts"][:19]}
+                for row in self._get_experiments(dataset_name)]
         runs.sort(key=lambda x: x["timestamp"], reverse=True)
         _cache[key] = runs
         return runs
@@ -456,21 +433,14 @@ class PortalClient:
         return self._collect_run_data(dataset_name, run_name)
 
     def _collect_run_data(self, dataset_name, run_name):
-        """Collect run data via REST API."""
+        """One run's items and scores, from /experiments + /experiment-items."""
         key = f"run:{dataset_name}:{run_name}"
         if key in _cache:
             return _cache[key]
 
-        # Get dataset ID and run metadata
-        dataset = self._sdk.get_dataset(dataset_name)
-        runs_raw = self._get_runs_for_dataset(dataset_name)
-        target_run = None
-        for r in runs_raw:
-            if r.get("name") == run_name:
-                target_run = r
-                break
-
-        if not target_run:
+        matches = [r for r in self._get_experiments(dataset_name, run_name)
+                   if r["name"] == run_name]
+        if not matches:
             return {"error": f"Run '{run_name}' not found",
                     "dataset": dataset_name,
                     "dataset_short": dataset_name.split("/")[-1],
@@ -479,72 +449,48 @@ class PortalClient:
                     "total_items": 0, "items": [],
                     "aggregates": {}, "model": "", "status": "UNKNOWN",
                     "score_names": [], "langfuse_url": self.host}
+        run = max(matches, key=lambda r: r["ts"])
+        meta = run["meta"]
 
-        meta = target_run.get("metadata") or {}
-
-        # Get all run items via paginated REST
-        ds_id = dataset.id
         try:
-            encoded_run = urllib.parse.quote(run_name)
-            run_items = self._paginate(
-                f"/api/public/dataset-run-items?datasetId={ds_id}&runName={encoded_run}"
-            )
-        except Exception:
+            run_items = self._paginate_cursor("/api/public/experiment-items", {
+                "experimentId": run["id"],
+                "fromStartTime": lookback_from_env(),
+                "fields": "core,io,scores,itemMetadata",
+            })
+        except Exception as exc:
+            logger.warning("Failed to fetch items for run %s (%s)", run_name, exc)
             run_items = []
-
-        # Build dataset item lookup
-        ds_items = {item.id: item for item in dataset.items}
 
         items_data = []
         score_totals = {}
-        # Run-level scores (certification_result + avg_*) ride on the first
-        # experiment trace (see cert_common.persist_run_evaluations).
-        run_scores = {}
-
         for ri in run_items:
-            trace_id = ri.get("traceId", "")
             item_scores = {}
-
-            # Read scores embedded in the trace itself.
-            # (NOTE: /api/public/scores?traceId=... silently ignores the filter
-            # and returns scores from every trace, so we cannot use it here.)
-            trace = self._get_trace(trace_id) if trace_id else None
-            for s in (trace or {}).get("scores", []) or []:
+            for s in ri.get("scores") or []:
                 sname = s.get("name")
-                if not sname:
+                # Run-level scores live on the experiment, not the item; skip
+                # any copy a pre-v5 runner also wrote onto an item trace.
+                if not sname or sname in RUN_LEVEL_SCORES or sname.startswith("avg_"):
                     continue
-                if sname in RUN_LEVEL_SCORES or sname.startswith("avg_"):
-                    if s.get("value") is not None:
-                        run_scores.setdefault(sname, s.get("value"))
-                    continue
-                sval = s.get("value")
-                item_scores[sname] = {
-                    "value": sval,
-                    "comment": s.get("comment", ""),
-                }
-                if sname not in score_totals:
-                    score_totals[sname] = []
+                sval = score_value(s)
+                item_scores[sname] = {"value": sval, "comment": s.get("comment") or ""}
+                score_totals.setdefault(sname, [])
                 if sval is not None:
                     score_totals[sname].append(sval)
 
-            # Get dataset item input/expected
-            ds_item_id = ri.get("datasetItemId", "")
-            ds_item = ds_items.get(ds_item_id)
-            inp = ds_item.input if ds_item else {}
-            expected = ds_item.expected_output if ds_item else {}
-
+            inp = parse_json_field(ri.get("input"))
+            expected = parse_json_field(ri.get("expectedOutput"))
             items_data.append({
-                "trace_id": trace_id,
-                "input": inp,
-                "expected_output": expected,
-                "question": (inp.get("question", inp.get("text", ""))[:120]
-                             if isinstance(inp, dict) else str(inp)[:120]),
+                "trace_id": ri.get("traceId", ""),
+                "input": inp if inp is not None else {},
+                "expected_output": expected if expected is not None else {},
+                "question": (str(inp.get("question", inp.get("text", "")))[:120]
+                             if isinstance(inp, dict) else str(inp or "")[:120]),
                 "expected_short": self._format_expected(expected),
                 "scores": item_scores,
             })
 
-        summary = summarize_run(
-            score_totals, meta, run_scores.get("certification_result"))
+        summary = summarize_run(score_totals, meta, run["cert"].get("cert_value"))
 
         all_score_names = sorted(set(
             name for item in items_data for name in item["scores"]
@@ -554,7 +500,7 @@ class PortalClient:
             "dataset": dataset_name,
             "dataset_short": dataset_name.split("/")[-1],
             "run_name": run_name,
-            "model": meta.get("model", self._parse_model_from_run_name(run_name)),
+            "model": self._model_of(run),
             **summary,
             "total_items": len(items_data),
             "items": items_data,

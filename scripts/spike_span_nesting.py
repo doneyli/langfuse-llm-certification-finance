@@ -1,46 +1,51 @@
 #!/usr/bin/env python3
 """
-SPIKE (#9, throwaway): verify the load-bearing assumption for use-case cert —
-that observations opened with start_as_current_observation *inside a
-run_experiment task callback* nest under the per-item trace, forming the tree
-  trace
-   └─ retrieve (span)
-       └─ calculate (tool)
-       └─ classify (generation, with model + token usage)
+SPIKE (disposable): verify the load-bearing assumptions of the deployment gate
+on Langfuse v4 + Python SDK v5.
 
-Runs run_experiment with ONE local item (no server dataset), then fetches the
-trace via the public API and prints the observation parentage so we can confirm
-nesting before building the real agent. If this fails, the agent must thread
-trace_context explicitly.
+Runs ONE item of a real (server-side) dataset through ``run_experiment`` with a
+task that opens nested observations, a run-level evaluator, and gate-shaped run
+metadata, then reads everything back through the v4 read API:
 
-Usage: uv run python scripts/spike_span_nesting.py
+  (a) GET /experiments?name=<run>&fields=core,metadata,scores
+        -> does metadata.gate_thresholds round-trip, and in what shape?
+  (b)   -> do run-level Evaluations land on the experiment's scores?
+  (c) GET /v2/observations?traceId=<item trace>
+        -> do the retriever / tool / generation observations nest under the
+           item trace the way the agents assume?
+
+Runs are named ``spike-v5-<timestamp>`` so they are obviously disposable.
+
+Usage: uv run python scripts/spike_span_nesting.py [--dataset certification/advisory-adversarial]
 """
 
-import base64
-import json
+import argparse
 import os
 import sys
 import time
-import urllib.request
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-from langfuse import get_client
-from agents.base import traced_span, traced_tool, traced_generation
+from langfuse import Evaluation, get_client
+from agents.base import traced_generation
+from cert_common import (api_get, iso_utc, normalize_run_metadata,
+                         paginate_cursor, recorded_gate)
 
 SPIKE_MODEL = "claude-haiku-4-5-20251001"
+SPIKE_METADATA = {"model": "spike", "gate_thresholds": {"x": 0.5}, "threshold": 0.85}
 
 
 def task(*, item, **kwargs):
-    with traced_span("retrieve") as s:
-        s.update(input={"q": item["input"]}, output={"operands": {"a": 6489, "b": 267.5}})
-        with traced_tool("calculate") as t:
+    lf = get_client()
+    with lf.start_as_current_observation(as_type="retriever", name="retrieve") as r:
+        r.update(input={"q": item.input}, output={"operands": {"a": 6489, "b": 267.5}})
+        with lf.start_as_current_observation(as_type="tool", name="calculate") as t:
             result = 6489 / 267.5
             t.update(input={"expr": "6489/267.5"}, output={"result": round(result, 2)})
-        # one tiny generation to confirm generation spans attach with usage
         ans = traced_generation(
             name="classify", model=SPIKE_MODEL, max_tokens=8,
             system="Reply with one word.",
@@ -49,49 +54,77 @@ def task(*, item, **kwargs):
     return {"answer": ans, "trajectory": {"tools_used": ["calculate"]}}
 
 
-def fetch_trace(host, auth, trace_id, tries=12, delay=3):
-    headers = {"Authorization": f"Basic {auth}"}
+def spike_run_evaluator(*, item_results, **kwargs):
+    return Evaluation(name="spike_run_score", value=1.0, comment="run-level spike")
+
+
+def retry(fn, tries=20, delay=3):
     for i in range(tries):
-        try:
-            req = urllib.request.Request(f"{host}/api/public/traces/{trace_id}", headers=headers)
-            return json.loads(urllib.request.urlopen(req).read())
-        except Exception as e:
-            print(f"  ...trace not queryable yet (try {i+1}/{tries}): {e}", file=sys.stderr)
-            time.sleep(delay)
+        out = fn()
+        if out:
+            return out
+        print(f"  ...not queryable yet (try {i+1}/{tries})", file=sys.stderr)
+        time.sleep(delay)
     return None
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", default="certification/advisory-adversarial")
+    args = ap.parse_args()
+
     lf = get_client()
-    print("Running 1-item experiment with nested spans...", file=sys.stderr)
+    dataset = lf.get_dataset(args.dataset)
+    run_name = f"spike-v5-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    started = iso_utc(hours_ago=1)
+    print(f"Running 1-item experiment '{run_name}' on {args.dataset}...", file=sys.stderr)
     result = lf.run_experiment(
-        name="spike-span-nesting",
-        run_name="spike-span-nesting",
-        data=[{"input": "FY2019 fixed asset turnover?"}],
+        name="spike-v5",
+        run_name=run_name,
+        data=dataset.items[:1],
         task=task,
+        run_evaluators=[spike_run_evaluator],
+        metadata=SPIKE_METADATA,
     )
     lf.flush()
+    print(f"experiment_id={result.experiment_id}\nexperiment_url={result.experiment_url}",
+          file=sys.stderr)
 
     ir = result.item_results[0]
     trace_id = getattr(ir, "trace_id", None)
-    print(f"\nitem output: {ir.output}", file=sys.stderr)
-    print(f"trace_id: {trace_id}", file=sys.stderr)
-    if not trace_id:
-        print("FAIL: no trace_id on item result", file=sys.stderr)
+    ok = True
+
+    # (a) + (b): experiment metadata and run-level scores
+    def fetch_experiment():
+        rows = api_get("/api/public/experiments", {
+            "name": run_name, "fromStartTime": started,
+            "fields": "core,metadata,scores"}).get("data") or []
+        row = rows[0] if rows else None
+        return row if row and row.get("scores") else None
+
+    exp = retry(fetch_experiment)
+    if not exp:
+        print("FAIL: experiment not found via GET /experiments", file=sys.stderr)
         sys.exit(1)
+    raw_meta = exp.get("metadata")
+    print(f"\n(a) raw metadata: {raw_meta!r}", file=sys.stderr)
+    meta = normalize_run_metadata(raw_meta)
+    gate = recorded_gate(meta)
+    print(f"    normalized gate_thresholds={meta.get('gate_thresholds')!r} "
+          f"-> recorded_gate={gate}", file=sys.stderr)
+    if gate != {"x": 0.5}:
+        print("FAIL: gate_thresholds does not round-trip", file=sys.stderr); ok = False
+    names = sorted(s.get("name") for s in exp.get("scores") or [])
+    print(f"(b) run-level scores on experiment: {names}", file=sys.stderr)
+    if "spike_run_score" not in names:
+        print("FAIL: run-level evaluation missing on experiment", file=sys.stderr); ok = False
 
-    host = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
-    pk, sk = os.getenv("LANGFUSE_PUBLIC_KEY", ""), os.getenv("LANGFUSE_SECRET_KEY", "")
-    auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
-
-    trace = fetch_trace(host, auth, trace_id)
-    if not trace:
-        print("FAIL: could not fetch trace (ingestion lag?)", file=sys.stderr)
-        sys.exit(1)
-
-    obs = trace.get("observations", [])
+    # (c) nesting under the item trace
+    obs = retry(lambda: paginate_cursor("/api/public/v2/observations", {
+        "traceId": trace_id, "fromStartTime": started,
+        "fields": "core,basic,model,usage"}) if trace_id else None)
+    obs = obs or []
     by_id = {o["id"]: o for o in obs}
-    print(f"\nTrace '{trace.get('name')}' has {len(obs)} observations:", file=sys.stderr)
 
     def depth(o):
         d, p = 0, o.get("parentObservationId")
@@ -100,30 +133,24 @@ def main():
             p = by_id[p].get("parentObservationId")
         return d
 
+    print(f"(c) trace {trace_id} has {len(obs)} observations:", file=sys.stderr)
     for o in sorted(obs, key=depth):
-        print(f"  {'  ' * depth(o)}- {o.get('name')} "
-              f"[{o.get('type')}] parent={o.get('parentObservationId')}", file=sys.stderr)
-
-    # Assertions
-    names = {o["name"]: o for o in obs}
-    ok = True
-    if "calculate" in names and "retrieve" in names:
-        if names["calculate"].get("parentObservationId") == names["retrieve"]["id"]:
-            print("\nPASS: 'calculate' nests under 'retrieve'", file=sys.stderr)
-        else:
-            print("\nFAIL: 'calculate' is NOT a child of 'retrieve'", file=sys.stderr); ok = False
+        print(f"      {'  ' * depth(o)}- {o.get('name')} [{o.get('type')}]",
+              file=sys.stderr)
+    by_name = {o.get("name"): o for o in obs}
+    calc, retr, gen = by_name.get("calculate"), by_name.get("retrieve"), by_name.get("classify")
+    if not (calc and retr and calc.get("parentObservationId") == retr["id"]):
+        print("FAIL: 'calculate' does not nest under 'retrieve'", file=sys.stderr); ok = False
+    if not (gen and retr and gen.get("parentObservationId") == retr["id"]):
+        print("FAIL: generation 'classify' missing or not under 'retrieve'",
+              file=sys.stderr); ok = False
     else:
-        print("\nFAIL: expected observations missing (retrieve/calculate)", file=sys.stderr); ok = False
+        print(f"    generation model={gen.get('providedModelName') or gen.get('model')} "
+              f"usage={gen.get('usageDetails')}", file=sys.stderr)
+    if retr and retr.get("type") != "RETRIEVER":
+        print(f"WARN: 'retrieve' type is {retr.get('type')}", file=sys.stderr)
 
-    gen = names.get("classify")
-    if gen:
-        u = gen.get("usageDetails") or gen.get("usage") or {}
-        print(f"generation 'classify' model={gen.get('model')} usage={u}", file=sys.stderr)
-        if not gen.get("model"):
-            print("WARN: generation has no model recorded", file=sys.stderr)
-    else:
-        print("FAIL: generation 'classify' missing", file=sys.stderr); ok = False
-
+    print("\nPASS" if ok else "\nFAIL", file=sys.stderr)
     sys.exit(0 if ok else 1)
 
 

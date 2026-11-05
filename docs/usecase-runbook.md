@@ -99,9 +99,9 @@ This performs the run:
 
 | What | Where |
 |---|---|
-| Nested agent trace (the showcase) | Langfuse UI → **Datasets** → run → open an item → span tree |
+| Nested agent trace (the showcase) | Langfuse UI → **Experiments** → the run (URL printed by the runner) → open an item → span tree |
 | Calculator tool I/O on numerical items | the `calculate` tool span's input/output |
-| Per-dimension PASS/FAIL | `certification_result` score comment on the first trace |
+| Per-dimension PASS/FAIL | `certification_result` score comment on the experiment (run-level score) |
 | Gate matrix (PASS/FAIL badge) | Portal `/` → row `usecase:10k-analyst` |
 | Run history / trend | Portal `/history/certification/financebench-sample` |
 | Items needing human sign-off | Langfuse UI → **Annotation Queues** → Certification Review |

@@ -30,7 +30,6 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from langfuse import get_client
-from cert_common import persist_run_evaluations
 from run_certification import create_certification_task
 from evaluators import (
     numerical_accuracy_evaluator,
@@ -55,9 +54,8 @@ def _run_gate_experiment(dataset, *, run_slug, gate_name, threshold,
                          evaluators, dataset_name):
     """Run one live-gate experiment with the same Langfuse conventions as
     run_certification.py: timestamped run name (re-runs must not append items
-    to an old run), metadata.model (dashboard row identity), and persisted
-    run-level scores (the SDK computes run_evaluators locally but does not
-    store them)."""
+    to an old run) and metadata.model (dashboard row identity). Run-level
+    scores (run_evaluators) are stored on the experiment by the SDK itself."""
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     result = dataset.run_experiment(
         name=dataset_name.split("/")[-1],
@@ -78,7 +76,6 @@ def _run_gate_experiment(dataset, *, run_slug, gate_name, threshold,
             "gate": gate_name,
         },
     )
-    persist_run_evaluations(result)
     return result
 
 

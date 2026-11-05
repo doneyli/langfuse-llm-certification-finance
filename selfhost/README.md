@@ -1,8 +1,16 @@
 # Self-host Langfuse (local evaluation)
 
-A curated [Langfuse v3](https://langfuse.com) Docker Compose stack for running
+A curated [Langfuse v4](https://langfuse.com) Docker Compose stack for running
 this deployment gate against a self-hosted Langfuse instance instead of
 [Langfuse Cloud](https://cloud.langfuse.com).
+
+**Versions.** Langfuse web + worker are pinned to the `:4` major line.
+Langfuse v4 needs ClickHouse **25.12 or newer** (the compose pins upstream's
+26.3), Postgres 15+ and Redis 7+. This repo's Python SDK v5 needs Langfuse
+**4.59.0 or newer**. Langfuse v3 receives security patches only until the end
+of January 2027 — a fresh `up` needs no migration; an existing v3 volume set is
+migrated by the v4 worker on first boot (back it up first, see the
+[v3 → v4 upgrade guide](https://langfuse.com/self-hosting/upgrade/upgrade-guides/upgrade-v3-to-v4)).
 
 This is meant for local evaluation and demos — not production. For a hardened
 production deployment (Kubernetes, managed databases, external object storage,
@@ -66,6 +74,22 @@ volume and are rarely needed for a local demo. On a long-running stack,
 periodically wipe with `docker volume rm langfuse_clickhouse_logs` (after a
 plain `down`) or just use `down -v` to wipe everything.
 
+## Optional: code evaluators
+
+Langfuse-managed **code evaluators** (deterministic scorers that run inside
+Langfuse) need a dispatcher on the worker. The compose ships two commented
+lines in the worker environment:
+
+```yaml
+# LANGFUSE_CODE_EVAL_DISPATCHER: insecure-local
+# QUEUE_CONSUMER_CODE_EVAL_EXECUTION_QUEUE_IS_ENABLED: "true"
+```
+
+`insecure-local` runs **TypeScript/JavaScript** code evaluators only, in the
+worker process with no sandbox — fine for a laptop, not for shared hosts.
+Python code evaluators need the `aws-lambda` dispatcher. Without a dispatcher,
+`monitor_production.py` remains the way to run the deterministic checks.
+
 ## Security notes
 
 ### Credentials
@@ -101,7 +125,7 @@ to `127.0.0.1:3000:3000` / `127.0.0.1:9090:9000` if you only need local access.
 
 ## Where this file came from
 
-`docker-compose.yml` is vendored from Langfuse's official v3 compose at
+`docker-compose.yml` is vendored from Langfuse's official v4 compose at
 <https://github.com/langfuse/langfuse/blob/main/docker-compose.yml>, shipped
 here so the deployment gate has a known-good local stack.
 
@@ -110,8 +134,9 @@ To re-sync when Langfuse publishes a new version:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/langfuse/langfuse/main/docker-compose.yml \
   -o selfhost/docker-compose.yml
-# Then re-apply the local header comment and (for major bumps) update the
-# `:3` tag on langfuse-web and langfuse-worker to the new major.
+# Then re-apply the local header comment and the commented code-evaluator
+# lines, and (for major bumps) check the `:4` tag on langfuse-web and
+# langfuse-worker and the ClickHouse minimum.
 ```
 
 Track upstream releases at <https://github.com/langfuse/langfuse/releases>.

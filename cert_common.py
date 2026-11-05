@@ -15,7 +15,9 @@ single home for the Langfuse lifecycle plumbing:
   langfuse_creds          - host + basic-auth header from env
   get_managed_prompt      - fetch a Langfuse-managed prompt (production label),
                             falling back to a hardcoded template (prompt mgmt)
-  persist_run_evaluations - write run-level scores back to Langfuse (scores)
+  api_get / paginate_cursor - the Langfuse v4 read API (cursor pagination,
+                            required fromStartTime) shared by portal, exporter,
+                            monitor and promoter
   queue_failed_items      - route low-scoring traces to an annotation queue
                             (human review)
 """
@@ -103,8 +105,20 @@ MODEL_GATE_SCORES = ("numerical_accuracy", "sentiment_accuracy")
 
 
 def _as_bar(value):
-    """A JSON number as a float bar; None for anything else (incl. bools)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    """A recorded bar as a float; None for anything else (incl. bools).
+
+    Accepts JSON numbers and numeric strings: SDK v5 experiment metadata comes
+    back from the /experiments endpoint with every value stringified
+    (``"threshold": "0.85"``).
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    if not isinstance(value, (int, float)):
         return None
     return float(value)
 
@@ -131,7 +145,7 @@ def recorded_gate(meta, score_names=()) -> dict | None:
     falling back to a scalar: an empty agent gate certifies everything (see
     agent_gate_thresholds), so no bar was actually enforced.
     """
-    meta = meta or {}
+    meta = normalize_run_metadata(meta)
     if meta.get("gate_thresholds") is not None:
         raw = meta["gate_thresholds"]
         bars = ({name: _as_bar(v) for name, v in raw.items()}
@@ -174,6 +188,165 @@ def langfuse_creds():
     return host, auth
 
 
+# --------------- Langfuse v4 read API (cursor pagination) ---------------
+#
+# Langfuse Cloud removed the legacy read endpoints (/traces, /scores,
+# /datasets/{name}/runs, /dataset-run-items) on 2026-11-16. Their replacements —
+# /experiments, /experiment-items, /v2/observations, /v3/scores — share one
+# shape: cursor pagination via ``meta.cursor``, ``limit <= 100``, and (for the
+# experiment and observation endpoints) a required ``fromStartTime``.
+
+PAGE_SIZE = 100
+MAX_PAGES = 100  # circuit breaker: 10k rows max per paginated call
+
+# How far back the portal / exporter look for experiments by default. The v4
+# endpoints require a lower time bound; two years covers every run this demo
+# has produced. Override with PORTAL_LOOKBACK_DAYS.
+DEFAULT_LOOKBACK_DAYS = 730
+
+
+def iso_utc(dt=None, *, days_ago=None, hours_ago=None) -> str:
+    """ISO 8601 UTC timestamp (``...Z``) for ``fromStartTime``/``toStartTime``.
+
+    ``dt`` defaults to now; ``days_ago`` / ``hours_ago`` shift it back.
+    """
+    from datetime import datetime, timedelta, timezone
+    dt = dt or datetime.now(timezone.utc)
+    if days_ago:
+        dt -= timedelta(days=days_ago)
+    if hours_ago:
+        dt -= timedelta(hours=hours_ago)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def lookback_from_env() -> str:
+    """``fromStartTime`` for experiment listings, from PORTAL_LOOKBACK_DAYS."""
+    try:
+        days = float(os.getenv("PORTAL_LOOKBACK_DAYS", DEFAULT_LOOKBACK_DAYS))
+    except ValueError:
+        days = DEFAULT_LOOKBACK_DAYS
+    return iso_utc(days_ago=days)
+
+
+def api_get(path, params=None, *, host=None, auth=None) -> dict:
+    """GET a Langfuse public API path (``/api/public/...``) and decode JSON.
+
+    ``params`` values that are lists/dicts are JSON-encoded (the ``filter``
+    parameter of /v2/observations takes a JSON array); ``None`` values are
+    dropped.
+    """
+    import urllib.parse
+    if host is None or auth is None:
+        host, auth = langfuse_creds()
+    query = {}
+    for key, value in (params or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, (list, dict)):
+            value = json.dumps(value)
+        elif isinstance(value, bool):
+            value = "true" if value else "false"
+        query[key] = value
+    url = f"{host}{path}"
+    if query:
+        url += ("&" if "?" in path else "?") + urllib.parse.urlencode(query)
+    req = urllib.request.Request(url, headers={"Authorization": f"Basic {auth}"})
+    return json.loads(urllib.request.urlopen(req).read())
+
+
+def paginate_cursor(path, params=None, *, host=None, auth=None,
+                    max_pages=MAX_PAGES, limit=PAGE_SIZE) -> list:
+    """Fetch every page of a cursor-paginated v4 list endpoint.
+
+    Follows ``meta.cursor`` until it is absent. Returns the concatenated
+    ``data`` rows.
+    """
+    params = dict(params or {})
+    params.setdefault("limit", limit)
+    out = []
+    for _ in range(max_pages):
+        resp = api_get(path, params, host=host, auth=auth)
+        out.extend(resp.get("data") or [])
+        cursor = (resp.get("meta") or {}).get("cursor")
+        if not cursor:
+            break
+        params["cursor"] = cursor
+    return out
+
+
+def parse_json_field(value):
+    """Decode a v4 ``input``/``output``/``expectedOutput`` field.
+
+    The v4 read endpoints return IO as raw strings; JSON-shaped ones are
+    decoded, anything else is returned as-is.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped[:1] in ("{", "[", '"'):
+            try:
+                return json.loads(stripped)
+            except ValueError:
+                return value
+    return value
+
+
+def score_value(score):
+    """A v3/v4 score's value as a float (BOOLEAN ``true/false`` -> 1.0/0.0).
+
+    Returns None for missing or non-numeric (categorical / text) values.
+    """
+    value = (score or {}).get("value")
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "false"):
+            return 1.0 if lowered == "true" else 0.0
+        try:
+            return float(lowered)
+        except ValueError:
+            return None
+    return None
+
+
+def normalize_run_metadata(meta) -> dict:
+    """Experiment metadata as recorded, with JSON-string values decoded.
+
+    SDK v5 records experiment metadata as OTel span attributes, and the
+    /experiments endpoint returns it flattened with every leaf stringified:
+    ``{"gate_thresholds": {"groundedness": 0.8}, "threshold": 0.85}`` comes back
+    as ``{"gate_thresholds.groundedness": "0.8", "threshold": "0.85"}``
+    (verified live, scripts/spike_span_nesting.py). Dotted keys are nested
+    again here; numeric strings are left as strings — ``recorded_gate`` parses
+    bars itself. Legacy (SDK 3.x) runs return ``{}``.
+    """
+    if isinstance(meta, str):
+        meta = parse_json_field(meta)
+    if not isinstance(meta, dict):
+        return {}
+    out = {}
+    for key, value in meta.items():
+        if isinstance(value, str) and value.strip()[:1] in ("{", "["):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                pass
+        if isinstance(key, str) and "." in key:
+            head, _, rest = key.partition(".")
+            nested = out.get(head)
+            if not isinstance(nested, dict):
+                nested = {}
+                out[head] = nested
+            nested.update(normalize_run_metadata({rest: value}))
+        elif isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key].update(value)
+        else:
+            out[key] = value
+    return out
+
+
 # --------------- Prompt management ---------------
 
 def get_managed_prompt(name: str, fallback: str):
@@ -189,52 +362,6 @@ def get_managed_prompt(name: str, fallback: str):
         return get_client().get_prompt(name, label="production", fallback=fallback)
     except Exception:
         return None
-
-
-# --------------- Run-level score persistence ---------------
-
-def persist_run_evaluations(result):
-    """Persist run-level evaluations as scores on the first experiment trace.
-
-    The Langfuse SDK computes ``run_evaluators`` locally but does not store them.
-    We POST them via the REST API, attaching to the first experiment trace so they
-    appear in the Langfuse UI under that trace's scores.
-    """
-    if not (getattr(result, "run_evaluations", None) and
-            getattr(result, "item_results", None)):
-        return
-
-    first_trace_id = None
-    for ir in result.item_results:
-        if getattr(ir, "trace_id", None):
-            first_trace_id = ir.trace_id
-            break
-    if not first_trace_id:
-        return
-
-    host, auth = langfuse_creds()
-    headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
-
-    for ev in result.run_evaluations:
-        if ev.value is None:
-            continue
-        try:
-            body = json.dumps({
-                "traceId": first_trace_id,
-                "name": ev.name,
-                "value": ev.value,
-                "comment": ev.comment or "",
-                "dataType": "NUMERIC",
-            }).encode()
-            req = urllib.request.Request(
-                f"{host}/api/public/scores",
-                data=body,
-                headers=headers,
-                method="POST",
-            )
-            urllib.request.urlopen(req)
-        except Exception as e:
-            print(f"  Warning: failed to persist {ev.name}: {e}", file=sys.stderr)
 
 
 # --------------- Annotation queue routing ---------------

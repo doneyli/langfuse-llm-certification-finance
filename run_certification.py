@@ -22,7 +22,7 @@ Environment variables:
     ANTHROPIC_API_KEY     (required for Claude models via native Anthropic SDK)
 
 Prerequisites:
-    pip install 'langfuse>=3.0,<4.0' openai
+    pip install 'langfuse>=5,<6' openai
     pip install anthropic   # optional, for native Claude API
 """
 
@@ -47,7 +47,7 @@ try:
     from langfuse import get_client
     from langfuse.openai import OpenAI as LangfuseOpenAI
 except ImportError:
-    print("Error: langfuse package not installed. Run: pip install 'langfuse>=3.0,<4.0'",
+    print("Error: langfuse package not installed. Run: pip install 'langfuse>=5,<6'",
           file=sys.stderr)
     sys.exit(1)
 
@@ -68,7 +68,6 @@ from evaluators import (
 )
 from cert_common import (
     model_gate_threshold,
-    persist_run_evaluations,
     queue_failed_items,
 )
 
@@ -440,10 +439,6 @@ def main():
     print("Results:", file=sys.stderr)
     print(result.format(), file=sys.stderr)
 
-    # Persist run-level evaluations to Langfuse (scores on the first experiment
-    # trace). The SDK computes run_evaluators locally but does not store them.
-    persist_run_evaluations(result)
-
     # Print certification summary
     print("\n" + "=" * 50, file=sys.stderr)
     print("CERTIFICATION SUMMARY", file=sys.stderr)
@@ -465,7 +460,10 @@ def main():
         if ev.name.startswith("avg_"):
             print(f"  {ev.name}: {ev.comment}", file=sys.stderr)
 
-    print(f"\nView details in Langfuse UI > Datasets > {args.dataset} > Runs", file=sys.stderr)
+    # Run-level scores (certification_result, avg_*) are stored on the
+    # experiment by the SDK itself.
+    print(f"\nView in Langfuse (Experiments): "
+          f"{getattr(result, 'experiment_url', None) or args.dataset}", file=sys.stderr)
 
     # Route failed items to annotation queue for human review
     if args.queue_failures and result.item_results:

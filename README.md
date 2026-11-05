@@ -181,7 +181,7 @@ either deployment. Pick one before running Quick Start.
 
 #### Option B — Self-host Langfuse
 
-The repo ships a curated Docker Compose stack with Langfuse pinned to v3. From
+The repo ships a curated Docker Compose stack with Langfuse pinned to v4 (ClickHouse ≥ 25.12; the Python SDK v5 used here needs Langfuse ≥ 4.59.0). From
 the repo root:
 
 ```bash
@@ -315,7 +315,7 @@ uv run python -m portal.app    # Opens on http://localhost:8050
 
 Open `http://localhost:8050` for the Certification Dashboard — the model and the
 agent appear as separate rows (`claude-sonnet-4-6` and `usecase:10k-analyst`) —
-or Langfuse UI > **Datasets** > `certification/financebench-sample` > **Runs**.
+or Langfuse UI > **Experiments** (the runner prints the experiment URL).
 
 #### 9. Review failed items
 
@@ -444,8 +444,10 @@ Or modify `DEFAULT_THRESHOLD` in `evaluators.py`.
 
 Langfuse is the source of truth for the evidence:
 
-- **Item-level scores** (numerical_accuracy, groundedness, etc.) appear on each trace under the dataset run in **Datasets > [dataset] > Runs**.
-- **Run-level scores** (certification_result, avg_numerical_accuracy, avg_groundedness) are persisted as scores on the first experiment trace. You can find them by searching for scores named `certification_result` in the Langfuse Scores view, or by clicking into any trace from the dataset run.
+- **Every gate run is an Experiment** (Langfuse UI → **Experiments**, or the URL the runner prints). Compare runs side by side against a baseline there.
+- **Item-level scores** (numerical_accuracy, groundedness, etc.) are attached to each experiment item and visible per item in the experiment view.
+- **Run-level scores** (`certification_result`, `avg_numerical_accuracy`, `avg_groundedness`, …) are stored **on the experiment itself** by the Langfuse SDK (`run_evaluators`) — no extra write. Read them with `GET /api/public/experiments?fields=scores` (what the portal and `export_results.py` do).
+- **The bars a run was judged against** are recorded in the experiment's metadata (`gate_thresholds` for agent runs, `threshold` + `gate` for model runs). Runs recorded before the SDK v5 upgrade carry no metadata in the v4 API, so the portal shows their verdict without a bar.
 
 ### `export_results.py` — Evidence exporter
 
@@ -729,7 +731,9 @@ Run on a cron schedule to catch issues in real time:
 
 It fetches recent traces (filtered by time window, tags, or trace name), skips traces that already have compliance scores (idempotent), runs `regulatory_compliance` and `completeness` evaluators on each, posts scores back to Langfuse, and exits with code 1 if compliance violations are detected — enabling integration with alerting systems.
 
-For subjective quality monitoring (groundedness, helpfulness), configure LLM-as-a-Judge evaluators directly in the Langfuse UI (**Evaluators** > **Set up Evaluator**), targeting "Live Observations" with a sampling rate to manage cost. See [Langfuse LLM-as-a-Judge docs](https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge).
+It reads production traces as their **root observations** (`GET /api/public/v2/observations?isRootObservation=true`) — in Langfuse v4 a trace's input and output are its root observation's — skips deployment-gate experiment traces (environment `sdk-experiment`; pass `--include-experiments` to score them too), and writes scores onto the root observation via the SDK.
+
+For subjective quality monitoring (groundedness, helpfulness), use Langfuse's managed **LLM-as-a-Judge** at the observation level: an **evaluator** (how to score — prompt, model, output definition) plus a **rule** (which observations — e.g. `isRootObservation = true` and `environment = production`, with a sampling rate to manage cost). Create both in the UI (**Evaluators**) or via `POST /api/public/v2/evaluators` and `/v2/evaluation-rules`. The legacy trace-level evaluators stopped producing results at the Langfuse Cloud v4 cutover (2026-11-16). See [Langfuse LLM-as-a-Judge docs](https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge).
 
 ### `promote_trace_to_dataset.py` — feedback loop (trace → golden dataset)
 
