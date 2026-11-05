@@ -100,13 +100,39 @@ step 1.
       `*/15 * * * * cd /path/to/repo && uv run python monitor_production.py --hours 1 --tags production --queue-violations`
 - [ ] Review flagged traces: Langfuse → **Annotation Queues → Certification Review**;
       decide the correct answer for real failures.
-- [ ] Promote a reviewed trace into the golden dataset (human-gated):
-      `uv run python promote_trace_to_dataset.py --dataset certification/financebench-sample --from-queue --expected "<correct answer>"`
+- [ ] Write the correct answer as a **Correction** on the trace (Langfuse trace
+      view or the queue), or pass it on the CLI.
+- [ ] Promote a reviewed trace into the golden dataset (human-gated; the
+      Correction is used as the expected answer unless `--expected` is given):
+      `uv run python promote_trace_to_dataset.py --dataset certification/financebench-sample --from-queue`
 - [ ] Re-run the gate so the scenario is now a regression test:
       `uv run python run_usecase_certification.py --use-case 10k-analyst --dataset certification/financebench-sample --ci`
 
 **Verify:** the dataset gains a `prod-<traceId>` item (metadata
 `promoted_from=production`); the next run's item count includes it.
+
+---
+
+## 4b. (Optional) Managed production monitoring — evaluators, rules, alert
+
+The Langfuse-native replacement for the `monitor_production.py` cron job.
+
+- [ ] **Human step: LLM connection.** Langfuse → **Settings → LLM Connections**:
+      add a provider key and set the project's default evaluation model. The
+      groundedness judge has no model of its own (`modelConfig: null`).
+- [ ] Preview: `uv run python setup_evaluators.py --dry-run`
+- [ ] Create: `uv run python setup_evaluators.py` (rules are created **disabled**),
+      then enable them in Langfuse → **Evaluators**, or re-create with `--enable`.
+- [ ] **Alert** (UI only; no public API for alerts is documented): Langfuse →
+      **Alerts → New alert**. Source: scores, score `regulatory_compliance`
+      (BOOLEAN, so `avg` = true-rate), condition `avg < 1` over 1 hour, channel
+      Slack / webhook / GitHub Actions.
+- [ ] Self-hosted only: Python code evaluators need the `aws-lambda` code-eval
+      dispatcher; with `insecure-local` (TS/JS only) or none, keep the cron job.
+
+**Verify:** a production root observation receives `regulatory_compliance` and
+`completeness` scores within minutes; code-evaluator executions appear under the
+`langfuse-code-eval` environment.
 
 ---
 
@@ -134,6 +160,7 @@ out of scope for this repo — follow the Langfuse guide if you want it:
 | Edge B live | Promote a prompt → Prompt Re-Certification workflow fires (§3) |
 | Edge A monitor→queue | `monitor_production.py --queue-violations` adds items to Certification Review |
 | Edge A trace→dataset | `promote_trace_to_dataset.py` creates a `prod-<traceId>` item |
+| Managed monitoring | Production root observations carry `regulatory_compliance` scores from the code evaluator (§4b) |
 | Prompt audit archive | (only if §5 done) a commit appears per prompt version |
 
 ---

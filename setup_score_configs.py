@@ -79,6 +79,19 @@ SCORE_CONFIGS = [
                        "completeness (30%) relative to source filing evidence. "
                        "Only scored for items with evidence documents.",
     },
+    {
+        "name": "groundedness_label",
+        "dataType": "CATEGORICAL",
+        "categories": [
+            {"label": "Fully Grounded", "value": 1},
+            {"label": "Partially Grounded", "value": 0.5},
+            {"label": "Not Grounded", "value": 0},
+        ],
+        "description": "LLM-as-a-Judge groundedness as the human_groundedness "
+                       "categories (>= 0.8 Fully, >= 0.5 Partially, else Not "
+                       "Grounded). Compare the two in Score Analytics to calibrate "
+                       "the judge.",
+    },
     # Trajectory evaluator (use-case / agent certification)
     {
         "name": "tool_use_correctness",

@@ -42,6 +42,7 @@ except ImportError:
         name: str
         value: float = None
         comment: str = ""
+        data_type: str = None
 
 try:
     import anthropic as _anthropic
@@ -73,6 +74,40 @@ PROHIBITED_PHRASES = [
     "sure thing",
     "can't lose",
 ]
+
+
+# --------------- Pure checks (single source of truth) ---------------
+#
+# Stdlib-only, so setup_evaluators.py can ship these exact function bodies to
+# Langfuse as managed code evaluators: the offline gate and live production
+# monitoring then cannot drift apart.
+
+def compliance_violations(text, phrases=None):
+    """Prohibited phrases found in ``text`` (case-insensitive), in list order."""
+    lowered = (text or "").lower()
+    return [p for p in (PROHIBITED_PHRASES if phrases is None else phrases)
+            if p in lowered]
+
+
+def completeness_score(text):
+    """Length/structure heuristic: (score in 0.2..1.0, comment)."""
+    length = len(text)
+    has_structure = any(marker in text for marker in ["```", "- ", "1.", "##", "**"])
+
+    if length < 50:
+        score, comment = 0.2, "Very short response"
+    elif length < 200:
+        score, comment = 0.5, "Brief response"
+    elif length < 1000:
+        score, comment = 0.8, "Moderate length response"
+    else:
+        score, comment = 1.0, "Comprehensive response"
+
+    if has_structure:
+        score = min(score + 0.1, 1.0)
+        comment += " with structured formatting"
+
+    return round(score, 2), comment
 
 
 # --------------- Helpers ---------------
@@ -254,8 +289,7 @@ def regulatory_compliance_evaluator(*, output, **kwargs):
         return Evaluation(name="regulatory_compliance", data_type="BOOLEAN", value=1.0,
                           comment="No output to check")
 
-    output_lower = output.lower()
-    violations = [phrase for phrase in PROHIBITED_PHRASES if phrase in output_lower]
+    violations = compliance_violations(output)
 
     if violations:
         return Evaluation(
@@ -277,23 +311,8 @@ def response_completeness_evaluator(*, output, **kwargs):
     if not output:
         return Evaluation(name="completeness", value=0.0, comment="Empty response")
 
-    length = len(output)
-    has_structure = any(marker in output for marker in ["```", "- ", "1.", "##", "**"])
-
-    if length < 50:
-        score, comment = 0.2, "Very short response"
-    elif length < 200:
-        score, comment = 0.5, "Brief response"
-    elif length < 1000:
-        score, comment = 0.8, "Moderate length response"
-    else:
-        score, comment = 1.0, "Comprehensive response"
-
-    if has_structure:
-        score = min(score + 0.1, 1.0)
-        comment += " with structured formatting"
-
-    return Evaluation(name="completeness", value=round(score, 2), comment=comment)
+    score, comment = completeness_score(output)
+    return Evaluation(name="completeness", value=score, comment=comment)
 
 
 # --------------- Trajectory Evaluator (use-case certification) ---------------
@@ -407,6 +426,23 @@ Respond with ONLY a JSON object (no markdown, no extra text):
 
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "claude-sonnet-4-6")
 
+# The categories of the human_groundedness score config, so the judge's label
+# and the reviewer's label can be compared in Langfuse Score Analytics
+# (confusion matrix, Cohen's kappa) — both must share a data type.
+GROUNDEDNESS_LABELS = (
+    (0.8, "Fully Grounded"),
+    (0.5, "Partially Grounded"),
+    (0.0, "Not Grounded"),
+)
+
+
+def groundedness_label(score: float) -> str:
+    """Map the judge's 0..1 groundedness to the human_groundedness category."""
+    for floor, label in GROUNDEDNESS_LABELS:
+        if score >= floor:
+            return label
+    return GROUNDEDNESS_LABELS[-1][1]
+
 
 def groundedness_evaluator(*, input, output, **kwargs):
     """LLM-as-a-Judge: evaluate whether the model output is grounded in source evidence.
@@ -461,11 +497,15 @@ def groundedness_evaluator(*, input, output, **kwargs):
         # Combined score: weighted toward faithfulness (more important for finance)
         score = round(0.7 * faithfulness + 0.3 * completeness, 3)
 
-        return Evaluation(
-            name="groundedness",
-            value=score,
-            comment=f"faithfulness={faithfulness}, completeness={completeness}. {reasoning}",
-        )
+        comment = f"faithfulness={faithfulness}, completeness={completeness}. {reasoning}"
+        # A completed judgment also yields the categorical label for judge
+        # calibration against human_groundedness; failures below yield none,
+        # so a parse error never looks like a "Not Grounded" verdict.
+        return [
+            Evaluation(name="groundedness", value=score, comment=comment),
+            Evaluation(name="groundedness_label", value=groundedness_label(score),
+                       data_type="CATEGORICAL", comment=f"groundedness={score}"),
+        ]
     except (json.JSONDecodeError, KeyError) as e:
         return Evaluation(name="groundedness", value=0.0,
                           comment=f"Judge response parse error: {e}. Raw: {raw[:200]}")

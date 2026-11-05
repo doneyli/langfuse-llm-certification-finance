@@ -197,6 +197,15 @@ def _bar_cell(agg: dict) -> str:
     return f"≥ {bar:.0%} {'PASS' if cleared else 'FAIL'}"
 
 
+def _dataset_version_line(meta: dict) -> str:
+    """The golden-set state the run used (newest item change), if recorded."""
+    version = (meta or {}).get("dataset_version")
+    if not version:
+        return "— (not recorded for this run)"
+    count = (meta or {}).get("dataset_item_count")
+    return f"{version} ({count} items)" if count else str(version)
+
+
 def format_markdown(data: dict) -> str:
     """Format results as a certification report in Markdown."""
     model = data["run_metadata"].get("model", "unknown")
@@ -224,6 +233,7 @@ def format_markdown(data: dict) -> str:
         f"| **Dataset** | {data['dataset']} |",
         f"| **Run** | {data['run_name']} |",
         f"| **Experiment ID** | {data.get('experiment_id') or '—'} |",
+        f"| **Dataset version** | {_dataset_version_line(data['run_metadata'])} |",
         f"| **Date** | {data['exported_at'][:10]} |",
         f"| **Items Evaluated** | {data['total_items']} |",
         f"| **Gate** | {describe_gate(gate)} |",

@@ -53,7 +53,7 @@ except ImportError:
 from agents import AGENT_REGISTRY
 from agents.base import as_agent_task
 from evaluators import average_score_evaluator, measure_bars, usecase_certification_gate
-from cert_common import queue_failed_items
+from cert_common import dataset_version, queue_failed_items
 
 # All three agents ship registered. The list stays separate from AGENT_REGISTRY
 # because the agents package tolerates a *missing* agent module file
@@ -92,7 +92,14 @@ def parse_args():
                         help="Route failed items to the 'Certification Review' "
                              "annotation queue for human review")
     parser.add_argument("--ci", action="store_true",
-                        help="CI mode: exit with code 1 if certification fails")
+                        help="CI mode: exit with code 1 if certification fails "
+                             "(or, with --baseline, if any case newly fails)")
+    parser.add_argument("--baseline", type=str, default=None, metavar="EXPERIMENT",
+                        help="Name of a reviewed experiment on the same dataset. "
+                             "Items that cleared every gated dimension there but "
+                             "fail one now are reported as newly failing cases "
+                             "(an average can hide them); with --ci they fail "
+                             "the run. thresholds.json stays the primary bar.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview dataset items without running the agent")
     parser.add_argument("--list", action="store_true",
@@ -135,6 +142,66 @@ def _should_queue(gate_dims):
                 return True
         return False
     return predicate
+
+
+# --------------- Approved-baseline regression check ---------------
+
+def item_clears(scores: dict, gate: dict) -> list:
+    """Gated dimensions an item fails: missing, or below its bar."""
+    failing = []
+    for dim, bar in gate.items():
+        value = scores.get(dim)
+        if value is None or value < bar:
+            failing.append(dim)
+    return failing
+
+
+def newly_failing(baseline: dict, current: dict, gate: dict) -> list:
+    """Cases that cleared every gated dimension in the baseline but not now.
+
+    ``baseline`` / ``current`` map dataset item id -> {score name: value}.
+    Returns ``[(item_id, [failing dims])]``; items absent from either run are
+    not compared.
+    """
+    out = []
+    for item_id, base_scores in baseline.items():
+        if item_id not in current or item_clears(base_scores, gate):
+            continue
+        failing = item_clears(current[item_id], gate)
+        if failing:
+            out.append((item_id, failing))
+    return sorted(out)
+
+
+def _baseline_item_scores(dataset_id, experiment_name):
+    """{dataset item id: {score: value}} for a past experiment (v4 read API)."""
+    from cert_common import lookback_from_env, paginate_cursor, score_value
+    exps = paginate_cursor("/api/public/experiments", {
+        "datasetId": dataset_id, "name": experiment_name,
+        "fromStartTime": lookback_from_env(), "fields": "core"})
+    exps = [e for e in exps if e.get("name") == experiment_name]
+    if not exps:
+        return None
+    exp = max(exps, key=lambda e: e.get("startTime") or "")
+    rows = paginate_cursor("/api/public/experiment-items", {
+        "experimentId": exp["id"], "fromStartTime": lookback_from_env(),
+        "fields": "core,scores"})
+    return {r.get("experimentItemId"): {s.get("name"): score_value(s)
+                                        for s in r.get("scores") or []}
+            for r in rows if r.get("experimentItemId")}
+
+
+def _current_item_scores(item_results):
+    out = {}
+    for ir in item_results or []:
+        item = getattr(ir, "item", None)
+        item_id = getattr(item, "id", None)
+        if not item_id:
+            continue
+        out[item_id] = {ev.name: (float(ev.value) if isinstance(ev.value, (int, float))
+                                  else None)
+                        for ev in getattr(ir, "evaluations", []) or []}
+    return out
 
 
 # --------------- Main ---------------
@@ -248,6 +315,8 @@ def main():
             "gate_thresholds": gate_thresholds,
             **({"advisory_thresholds": advisory_thresholds}
                if advisory_thresholds else {}),
+            "dataset_version": dataset_version(dataset.items),
+            "dataset_item_count": len(dataset.items),
         },
     )
 
@@ -295,12 +364,26 @@ def main():
           f"{getattr(result, 'experiment_url', None) or args.dataset}",
           file=sys.stderr)
 
+    regressions = []
+    if args.baseline:
+        baseline = _baseline_item_scores(dataset.id, args.baseline)
+        if baseline is None:
+            print(f"\n  Baseline '{args.baseline}' not found on {args.dataset}; "
+                  f"skipping the per-case check.", file=sys.stderr)
+        else:
+            regressions = newly_failing(
+                baseline, _current_item_scores(result.item_results), gate_thresholds)
+            print(f"\n  Baseline: {args.baseline} — {len(regressions)} newly failing "
+                  f"case(s)", file=sys.stderr)
+            for item_id, dims in regressions:
+                print(f"    {item_id}: now fails {', '.join(dims)}", file=sys.stderr)
+
     if args.queue_failures and result.item_results:
         queue_failed_items(result.item_results, _should_queue(gate_dims))
 
     langfuse.flush()
 
-    if args.ci and (cert is None or cert.value != 1.0):
+    if args.ci and (cert is None or cert.value != 1.0 or regressions):
         sys.exit(1)
 
 

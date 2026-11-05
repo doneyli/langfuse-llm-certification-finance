@@ -128,6 +128,30 @@ To make the gates actually execute in Actions you would add
 A GitHub runner cannot reach a `localhost` Langfuse, so that route means
 Langfuse Cloud or a publicly reachable self-hosted instance.
 
+## The recommended CI shape (documented, not enabled here)
+
+Langfuse ships a GitHub Action, `langfuse/experiment-action`, and SDK support
+(`RegressionError`, `RunnerContext`, Python SDK ≥ 4.6) for running an experiment
+in CI and failing the job on a regression; see
+[Experiments in CI/CD](https://langfuse.com/docs/evaluation/experiments/experiments-ci-cd).
+The policy it documents is an **approved baseline compared per case**: an
+average can hide a newly failing item, so the job fails if any case that passed
+in a reviewed baseline experiment now fails.
+
+This repo keeps CI credential-free (above), so it does not use the action.
+It offers the same per-case check as an opt-in flag on the agent runner:
+
+```bash
+uv run python run_usecase_certification.py --use-case advisory-draft \
+    --dataset certification/advisory-adversarial --ci \
+    --baseline <name of a reviewed experiment on the same dataset>
+```
+
+Items are matched by dataset item id. An item that cleared every gated
+dimension in the baseline but fails one now is printed as a "newly failing
+case", and with `--ci` it fails the run. `thresholds.json` stays the primary
+bar; the baseline only adds the per-case check.
+
 ## Prior art
 
 This pattern is lifted from the real-estate demo in

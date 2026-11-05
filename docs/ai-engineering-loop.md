@@ -168,10 +168,12 @@ Queues → Certification Review**.
 agent once per dataset item via Langfuse `run_experiment`, producing one comparable
 run. You change **one variable** and re-run to compare:
 - **Model** — `--model claude-sonnet-4-6` vs `--model claude-haiku-4-5-20251001`.
-  The headline result: the *system* lifts a weaker model. Haiku alone scores ~60%
-  raw numerical accuracy, but wrapped in the calculator tool the **agent** still
-  PASSES at ~90% — because the arithmetic is grounded in a tool, not the model's
-  head. *You are gating the system, not the model.*
+  On 2026-11-04 both PASSED the agent gate on the 10-item sample (Haiku: 90%
+  numerical accuracy, 96.5% groundedness). The arithmetic sits in an auditable
+  calculator tool span rather than the model's head. *You are gating the
+  system, not the model.* (An earlier run had Haiku alone at ~60% numerical
+  accuracy on the model gate; current model-gate runs on this sample score
+  90–100%, so that contrast is not reproduced today.)
 - **Prompt** — the free-form `compose`/`draft` steps fetch a `production`-labelled
   Langfuse prompt (`cert_common.get_managed_prompt`, hardcoded fallback). Edit and
   version it in the UI, promote a new version, re-run — the runs compare on the
@@ -351,27 +353,33 @@ prompt change, not just on a code push.
 
 ## Demoing this
 
-`main` carries the **assembled** state: the shared foundation plus all three
-agents (#9 10k-analyst, #10 sentiment-triage, #11 advisory-draft) plus the
-offline-test CI, verified together (`run_usecase_certification.py --list` shows
-all three `[registered]`; 52 offline tests pass). Run the full narrative end to
-end from `main`.
+`main` carries all three agents (10k-analyst, sentiment-triage, advisory-draft)
+on the Langfuse Python SDK v5 against Langfuse v4 (`make test`: 201 offline
+tests). Run the full narrative end to end from `main`.
 
-The 5-minute live walk-through is scripted in the
-[runbook](usecase-runbook.md#6-demo-script-the-5-minute-story). Loop-shaped
+The live walk-through, with pre-run commands and Q&A soft spots, is scripted in
+the [runbook](usecase-runbook.md#6-demo-script-the-10-minute-story). Loop-shaped
 narration:
 
-1. **Trace** — open a 10‑K item; walk plan → retrieve → **calculate** → compose.
-2. **Evaluate** — read the `certification_result` breakdown; PASS = all dimensions.
-3. **Experiment** — re-run on Haiku; the *system* still PASSES (calculator lift).
-4. **Evaluate (the FAIL)** — advisory-draft on the adversarial item: perfectly
-   accurate, but one prohibited phrase → compliance < 100% → **gate FAILS**.
+1. **Trace** — open a 10-K item in Langfuse **Experiments**; the **Agent Graph**
+   shows plan → retrieve-evidence → **calculate** → compose-answer.
+2. **Evaluate** — read the `certification_result` (true/false) breakdown;
+   PASS = every bar in `cicd/thresholds.json` cleared.
+3. **Experiment** — compare the Haiku run of the agent with the Sonnet run; both
+   PASS on the 10-item sample (2026-11-04). The gate answers "is the cheaper
+   model good enough for this job?"
+4. **Evaluate (the FAIL)** — advisory-draft with the tempting prompt: accurate,
+   but one prohibited phrase → compliance < 100% → **gate FAILS**.
    *Accurate but can't clear the gate.*
-5. **Monitor + close the loop** — point at `monitor_production.py` on live traffic,
-   then show both feedback edges: a flagged trace → `promote_trace_to_dataset.py` →
-   golden data (Edge A), and a prompt promotion → auto re-run of the gate (Edge B).
-   Both are implemented; activating them (and the first live run) is a one-time
-   console step ([activation checklist](loop-activation-checklist.md)).
+5. **Monitor** — the gate's own compliance and completeness checks run inside
+   Langfuse on production traffic (managed evaluators, generated from
+   `evaluators.py`); a violating trace shows `regulatory_compliance = false`, and
+   the dashboard's compliance true-rate feeds an alert.
+6. **Build datasets / close the loop** — a reviewer's **Correction** on that trace
+   → `promote_trace_to_dataset.py` → golden data (Edge A), and the next run with
+   `--baseline` names any newly failing case. A prompt promotion → re-run of the
+   gate, with **Prompts → Metrics** comparing versions (Edge B).
+   Activation steps are in the [activation checklist](loop-activation-checklist.md).
 
 ## How this doc relates to the others
 
