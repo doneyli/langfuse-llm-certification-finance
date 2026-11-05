@@ -33,7 +33,9 @@ import type { ScoreAggregate } from "../types";
 // Every evaluator row carries the bar it was judged against, decided
 // server-side: an agent gate's bar for that dimension, a model gate's one bar
 // on its one judged score only, and "—" for any evaluator the gate never
-// judged. So the column is truthful for both gate kinds.
+// judged. So the column is truthful for both gate kinds. An advisory bar is
+// labelled as such and coloured as a warning when missed, never as a failure:
+// it was reported, and it did not decide the run's status.
 const HEADERS: TableColumnConfigProps[] = [
   { label: "Evaluator" },
   { label: "Gate", width: "90px" },
@@ -51,9 +53,17 @@ function barOf(agg: ScoreAggregate): number | null {
 function clearedOf(agg: ScoreAggregate): boolean | null {
   return agg.cleared ?? null;
 }
+function isAdvisory(agg: ScoreAggregate): boolean {
+  return agg.advisory === true;
+}
+/** A miss that failed the run, as opposed to an advisory bar missed. */
+function failedBar(agg: ScoreAggregate): boolean {
+  return clearedOf(agg) === false && !isAdvisory(agg);
+}
 
 function aggRow([name, agg]: [string, ScoreAggregate]): TableRowType {
   const bar = barOf(agg);
+  const advisory = isAdvisory(agg);
   return {
     id: name,
     items: [
@@ -68,12 +78,25 @@ function aggRow([name, agg]: [string, ScoreAggregate]): TableRowType {
             }}
           >
             {bar === null ? "—" : `≥ ${barPct(bar)}`}
+            {advisory && (
+              <span
+                title="Advisory bar: reported on every run, never blocks"
+                style={{ display: "block", fontSize: 11, color: "var(--text-subtle)" }}
+              >
+                advisory
+              </span>
+            )}
           </span>
         ),
       },
       {
         label: (
-          <ScoreBar value={agg.mean} threshold={bar} cleared={clearedOf(agg)} />
+          <ScoreBar
+            value={agg.mean}
+            threshold={bar}
+            cleared={clearedOf(agg)}
+            advisory={advisory}
+          />
         ),
       },
       {
@@ -126,6 +149,7 @@ export default function Breakdown() {
         // bar per dimension, all of which must clear. `?? null` because a
         // stale payload can omit these keys, and undefined must mean "none".
         const gate = data.gate_thresholds ?? null;
+        const advisoryCount = Object.keys(data.advisory_thresholds ?? {}).length;
         const scalar = data.threshold ?? null;
         const aggEntries = Object.entries(data.aggregates).sort(([a], [b]) =>
           a.localeCompare(b)
@@ -140,6 +164,7 @@ export default function Breakdown() {
           mean: agg.mean * 100,
           bar: barOf(agg),
           cleared: clearedOf(agg),
+          advisory: isAdvisory(agg),
         }));
 
         const langfuseDeep = `${data.langfuse_url}/trace`;
@@ -186,7 +211,11 @@ export default function Breakdown() {
               />
               {gate !== null ? (
                 <BigStat
-                  label="Gate (all must clear)"
+                  label={
+                    advisoryCount > 0
+                      ? `Gate (all must clear) + ${advisoryCount} advisory`
+                      : "Gate (all must clear)"
+                  }
                   title={`${Object.keys(gate).length} dims`}
                   size="lg"
                   state="muted"
@@ -214,13 +243,14 @@ export default function Breakdown() {
                           {name}{" "}
                           <span style={{ color: "var(--text-muted)" }}>
                             ≥ {barPct(bar)}
+                            {isAdvisory(agg) ? " advisory" : ""}
                           </span>
                         </>
                       )
                     }
                     title={`${(agg.mean * 100).toFixed(1)}%`}
                     size="lg"
-                    error={clearedOf(agg) === false}
+                    error={failedBar(agg)}
                   />
                 );
               })}
@@ -281,13 +311,16 @@ export default function Breakdown() {
                         labelStyle={{ color: chart.tooltipText }}
                         itemStyle={{ color: chart.tooltipText }}
                         formatter={(v: number, _name, item) => {
-                          const bar =
-                            (item?.payload as { bar?: number | null } | undefined)
-                              ?.bar ?? null;
+                          const payload = item?.payload as
+                            | { bar?: number | null; advisory?: boolean }
+                            | undefined;
+                          const bar = payload?.bar ?? null;
                           return [
                             bar === null
                               ? `${v.toFixed(1)}% (not gated)`
-                              : `${v.toFixed(1)}% (gate ≥ ${barPct(bar)})`,
+                              : payload?.advisory
+                                ? `${v.toFixed(1)}% (advisory ≥ ${barPct(bar)}, never blocks)`
+                                : `${v.toFixed(1)}% (gate ≥ ${barPct(bar)})`,
                             "Mean",
                           ];
                         }}
@@ -301,7 +334,9 @@ export default function Breakdown() {
                                 ? chart.neutral
                                 : d.cleared
                                   ? chart.pass
-                                  : chart.fail
+                                  : d.advisory
+                                    ? chart.warn
+                                    : chart.fail
                             }
                           />
                         ))}

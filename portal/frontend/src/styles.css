@@ -28,6 +28,10 @@
   --fail-bar-a: #c42b2b;
   --fail-bar-b: #e04848;
 
+  --warn-fg: #8a5a00;
+  --warn-bar-a: #b7791f;
+  --warn-bar-b: #d69e2e;
+
   --chart-grid: rgba(15, 20, 25, 0.06);
   --chart-axis: rgba(15, 20, 25, 0.12);
   --chart-line: #1e88e5;
@@ -62,6 +66,10 @@
   --fail-fg: #f87171;
   --fail-bar-a: #dc2626;
   --fail-bar-b: #f87171;
+
+  --warn-fg: #fbbf24;
+  --warn-bar-a: #d97706;
+  --warn-bar-b: #fbbf24;
 
   --chart-grid: rgba(229, 231, 235, 0.08);
   --chart-axis: rgba(229, 231, 235, 0.14);
@@ -586,6 +594,11 @@ code,
 
 .score-bar-fill.fail {
   background: linear-gradient(90deg, var(--fail-bar-a) 0%, var(--fail-bar-b) 100%);
+}
+
+/* An advisory bar missed: worth a look, never a failure. */
+.score-bar-fill.warn {
+  background: linear-gradient(90deg, var(--warn-bar-a) 0%, var(--warn-bar-b) 100%);
 }
 
 /* No bar recorded for this score — show the value without a verdict colour. */

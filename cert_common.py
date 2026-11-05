@@ -13,6 +13,10 @@ single home for the Langfuse lifecycle plumbing:
   model_gate_threshold    - the model-cert pass bar, same file
   recorded_gate           - the bars a past run was actually judged by, read
                             from its own metadata (portal + evidence pack)
+  recorded_advisory       - the advisory bars a past run reported, same source;
+                            never part of the verdict
+  bar_verdict             - one score's bar, whether it cleared, and whether
+                            that bar was advisory (portal + evidence pack)
   langfuse_creds          - host + basic-auth header from env
   get_managed_prompt      - fetch a Langfuse-managed prompt (production label),
                             falling back to a hardcoded template (prompt mgmt)
@@ -239,6 +243,52 @@ def describe_gate(gate: dict | None) -> str:
         return "— (no bar recorded for this run)"
     bars = " · ".join(f"{name} ≥ {bar:.0%}" for name, bar in sorted(gate.items()))
     return f"all must clear: {bars}" if len(gate) > 1 else bars
+
+
+def recorded_advisory(meta) -> dict | None:
+    """Return the advisory bars a dataset run reported, as {score_name: bar}, or None.
+
+    run_usecase_certification.py records them as ``advisory_thresholds``, apart
+    from ``gate_thresholds`` on purpose: they were measured and reported but
+    never decided the verdict, so they are never part of ``recorded_gate`` or a
+    verdict replay. A name that is also a required bar is dropped, since the
+    required bar is the one that judged it. Runs recorded before the advisory
+    tier existed return None.
+    """
+    meta = normalize_run_metadata(meta)
+    raw = meta.get("advisory_thresholds")
+    if not isinstance(raw, dict):
+        return None
+    required = recorded_gate(meta) or {}
+    bars = {name: _as_bar(v) for name, v in raw.items() if name not in required}
+    bars = {name: bar for name, bar in bars.items() if bar is not None}
+    return bars or None
+
+
+def describe_advisory(advisory: dict | None) -> str:
+    """One line naming every advisory bar, e.g. 'completeness ≥ 70% (never blocks)'."""
+    if not advisory:
+        return ""
+    bars = " · ".join(f"{name} ≥ {bar:.0%}" for name, bar in sorted(advisory.items()))
+    return f"{bars} (reported, never blocks)"
+
+
+def bar_verdict(name: str, mean: float, required: dict, advisory: dict) -> dict:
+    """The bar one score was held to, as {"bar", "cleared", "advisory"}.
+
+    ``mean`` must be the unrounded mean the gate compared. A required bar wins
+    over an advisory one of the same name. An advisory bar reports whether it
+    was met but never changes a verdict, which is why callers get the
+    ``advisory`` flag instead of having to cross-reference two dicts. A score
+    with neither bar gets ``bar: None, cleared: None``.
+    """
+    if name in required:
+        bar, is_advisory = required[name], False
+    elif name in advisory:
+        bar, is_advisory = advisory[name], True
+    else:
+        return {"bar": None, "cleared": None, "advisory": False}
+    return {"bar": bar, "cleared": mean >= bar, "advisory": is_advisory}
 
 
 # --------------- Credentials ---------------

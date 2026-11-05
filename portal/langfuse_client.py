@@ -15,11 +15,13 @@ from cert_common import (
     MAX_PAGES,
     PAGE_SIZE,
     api_get,
+    bar_verdict,
     langfuse_creds,
     lookback_from_env,
     normalize_run_metadata,
     paginate_cursor,
     parse_json_field,
+    recorded_advisory,
     recorded_gate,
     score_value,
 )
@@ -122,32 +124,34 @@ def summarize_run(score_totals, meta, cert_value=None):
     """Aggregate a run's per-item scores and judge them against its recorded gate.
 
     ``score_totals`` maps score name -> item values. Returns ``aggregates``
-    (per score: display stats plus the ``bar`` it was judged against and
-    whether it ``cleared`` it), ``threshold`` and ``gate_thresholds`` (see
-    resolve_run_thresholds), and the run ``status``.
+    (per score: display stats plus the ``bar`` it was held to, whether it
+    ``cleared`` it, and whether that bar was ``advisory``), ``threshold`` and
+    ``gate_thresholds`` (see resolve_run_thresholds), ``advisory_thresholds``
+    (cert_common.recorded_advisory), and the run ``status``.
 
     An evaluator the gate did not judge gets no bar: a model gate's threshold
-    belongs to its one judged score, never to the rest. Verdicts compare the
-    unrounded means the gate compared; the rounded mean is display-only.
+    belongs to its one judged score, never to the rest. An advisory bar is
+    shown with its own met/missed state but never feeds ``status``. Verdicts
+    compare the unrounded means the gate compared; the rounded mean is
+    display-only.
     """
     means = {name: sum(values) / len(values)
              for name, values in score_totals.items() if values}
     threshold, gate = resolve_run_thresholds(meta, None, means)
     bars = recorded_gate(meta, means) or {}
+    advisory = recorded_advisory(meta)
 
     aggregates = {}
     for name, values in score_totals.items():
         if not values:
             continue
-        bar = bars.get(name)
         aggregates[name] = {
             "mean": round(means[name], 3),
             "min": round(min(values), 3),
             "max": round(max(values), 3),
             "count": len(values),
             "pass_rate": round(sum(1 for v in values if v >= 0.5) / len(values), 3),
-            "bar": bar,
-            "cleared": None if bar is None else means[name] >= bar,
+            **bar_verdict(name, means[name], bars, advisory or {}),
         }
 
     if cert_value is not None:
@@ -155,8 +159,9 @@ def summarize_run(score_totals, meta, cert_value=None):
         # shows PASSED on one page and UNKNOWN on another.
         status = "PASSED" if cert_value == 1.0 else "FAILED"
     elif bars:
-        # Older runs without a persisted gate score: re-apply the bars the run
-        # recorded, to exactly the scores they judged.
+        # Older runs without a persisted gate score: re-apply the required bars
+        # the run recorded, to exactly the scores they judged. Advisory bars
+        # never blocked, so they are not replayed.
         status = replay_gate(bars, means)
     else:
         # No persisted gate score and no recorded bar — nothing to judge
@@ -164,7 +169,8 @@ def summarize_run(score_totals, meta, cert_value=None):
         status = "UNKNOWN"
 
     return {"aggregates": aggregates, "threshold": threshold,
-            "gate_thresholds": gate, "status": status}
+            "gate_thresholds": gate, "advisory_thresholds": advisory,
+            "status": status}
 
 
 class PortalClient:
@@ -380,6 +386,7 @@ class PortalClient:
             "primary_score": primary,
             "threshold": threshold,
             "gate_thresholds": gate,
+            "advisory_thresholds": recorded_advisory(row["meta"]),
             "run_name": row["name"],
             "cert_comment": cert.get("cert_comment", ""),
         }
@@ -446,6 +453,7 @@ class PortalClient:
                     "dataset_short": dataset_name.split("/")[-1],
                     "run_name": run_name,
                     "threshold": None, "gate_thresholds": None,
+                    "advisory_thresholds": None,
                     "total_items": 0, "items": [],
                     "aggregates": {}, "model": "", "status": "UNKNOWN",
                     "score_names": [], "langfuse_url": self.host}

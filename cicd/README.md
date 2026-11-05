@@ -49,7 +49,11 @@ In run metadata the two tiers live under separate keys: required bars under
 `gate_thresholds`, advisory bars under `advisory_thresholds`. That split is
 load-bearing. The portal and the evidence pack replay an older run's verdict as
 `all()` over `gate_thresholds` (`cert_common.recorded_gate`), so an advisory bar
-recorded there would fail a run the gate passed.
+recorded there would fail a run the gate passed. Both readers show the
+advisory bars from their own key (`cert_common.recorded_advisory`): the portal
+counts them apart from the gate dims and draws a miss amber rather than red, and
+the evidence pack gives them an **Advisory** row and `MET`/`MISS (advisory)` in
+its Bar column.
 
 Use advisory for a signal worth watching on every run that should not block a
 release on its own: a heuristic, or a new evaluator still being calibrated.

@@ -65,6 +65,7 @@ function tableRow(row: DashboardRow): TableRowType {
           <ThresholdCell
             threshold={row.threshold}
             gate={row.gate_thresholds}
+            advisory={row.advisory_thresholds}
             detailsHref={detailsHref}
           />
         ),

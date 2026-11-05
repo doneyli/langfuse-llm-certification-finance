@@ -10,6 +10,8 @@ export interface ChartTheme {
   threshold: string;
   pass: string;
   fail: string;
+  /** An advisory bar missed: a warning, never a failure. */
+  warn: string;
   tooltipBg: string;
   tooltipBorder: string;
   tooltipText: string;
@@ -24,6 +26,7 @@ const LIGHT: ChartTheme = {
   threshold: "#0a8a5f",
   pass: "#0a8a5f",
   fail: "#c42b2b",
+  warn: "#b7791f",
   tooltipBg: "#ffffff",
   tooltipBorder: "#e3e5ea",
   tooltipText: "#0f1419",
@@ -38,6 +41,7 @@ const DARK: ChartTheme = {
   threshold: "#34d399",
   pass: "#34d399",
   fail: "#f87171",
+  warn: "#fbbf24",
   tooltipBg: "#13161d",
   tooltipBorder: "#232731",
   tooltipText: "#e5e7eb",

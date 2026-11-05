@@ -2,13 +2,16 @@ import { Link as RouterLink } from "react-router-dom";
 import { Link } from "@clickhouse/click-ui";
 
 import { barPct, gateEntries, gateSummary } from "../lib/gate";
-import type { GateThresholds } from "../types";
+import type { AdvisoryThresholds, GateThresholds } from "../types";
 
 interface Props {
   /** Bar for the score shown next to this cell. */
   threshold: number | null | undefined;
   /** Per-dimension bars when the run was judged by an agent gate. */
   gate: GateThresholds | null | undefined;
+  /** Advisory bars the run also reported. Never part of the verdict, so they
+   *  are counted apart from the gate dims. */
+  advisory?: AdvisoryThresholds | null;
   /** The run's Details page, which lists every dimension against its bar. */
   detailsHref: string;
 }
@@ -23,11 +26,22 @@ interface Props {
  * link rather than a tooltip, so the whole gate is reachable by touch,
  * keyboard, and screen reader — not only by hovering a mouse.
  */
-export default function ThresholdCell({ threshold, gate, detailsHref }: Props) {
+export default function ThresholdCell({
+  threshold,
+  gate,
+  advisory,
+  detailsHref,
+}: Props) {
   // `== null` on purpose: a stale or partial payload can omit these keys, and
   // undefined must read as "no bar", not as a bar.
   if (gate != null) {
     const dims = gateEntries(gate).length;
+    const advisoryDims = advisory != null ? Object.keys(advisory).length : 0;
+    const summary = gateSummary(gate, advisory);
+    const label =
+      advisoryDims > 0
+        ? `of ${dims} gate dims + ${advisoryDims} advisory`
+        : `of ${dims} gate dims`;
     return (
       <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
         <span className="mono" style={{ fontSize: 13 }}>
@@ -37,10 +51,10 @@ export default function ThresholdCell({ threshold, gate, detailsHref }: Props) {
           component={RouterLink}
           to={detailsHref}
           size="sm"
-          title={gateSummary(gate)}
-          aria-label={`of ${dims} gate dims — ${gateSummary(gate)}. View all bars.`}
+          title={summary}
+          aria-label={`${label}: ${summary}. View all bars.`}
         >
-          of {dims} gate dims
+          {label}
         </Link>
       </span>
     );
