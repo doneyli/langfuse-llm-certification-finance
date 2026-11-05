@@ -27,6 +27,7 @@ Prerequisites:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -42,6 +43,51 @@ except ImportError:
 
 SCRIPT_DIR = Path(__file__).parent
 SAMPLE_DIR = SCRIPT_DIR / "sample_data"
+
+
+# --------------- Stable item ids ---------------
+#
+# Langfuse upserts a dataset item by id, so deterministic ids make re-running
+# this script safe: the same golden case maps to the same item instead of a
+# duplicate. Item ids are unique across the whole project and cannot be reused
+# across datasets, so the id starts with the dataset's short name (the same
+# FinanceBench case lives in both -sample and -v1); datasets loaded under a
+# custom --prefix also get a short hash of the full name.
+
+DEFAULT_PREFIX = "certification"
+
+
+def item_id(dataset_name: str, key: str) -> str:
+    """Deterministic item id, e.g. ``financebench-sample-financebench_id_03029``."""
+    prefix, _, short = dataset_name.rpartition("/")
+    base = f"{short or dataset_name}-{key}"
+    if prefix == DEFAULT_PREFIX:
+        return base
+    return f"{hashlib.sha256(dataset_name.encode()).hexdigest()[:6]}-{base}"
+
+
+def text_key(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+def assign_item_ids(dataset_name: str, kind: str, items: list) -> list:
+    """Attach a stable ``id`` to every item (in place); returns the items.
+
+    Natural keys: FinanceBench ``financebench_id``, FPB ``sha256(text)[:12]``,
+    advisory-adversarial the item's position in its curated JSON file. Falls
+    back to a hash of the input when the natural key is missing.
+    """
+    for index, item in enumerate(items):
+        inp = item.get("input") or {}
+        if kind == "financebench":
+            key = (item.get("metadata") or {}).get("financebench_id") or \
+                text_key(json.dumps(inp, sort_keys=True))
+        elif kind == "fpb":
+            key = text_key(inp.get("text", "") if isinstance(inp, dict) else str(inp))
+        else:
+            key = f"{index:03d}"
+        item["id"] = item_id(dataset_name, key)
+    return items
 
 
 # --------------- Dataset Definitions ---------------
@@ -161,16 +207,18 @@ def load_advisory_adversarial_items():
 
 # --------------- Dataset Creation ---------------
 
-def create_dataset(client, name, description, items, dry_run=False):
-    """Create a Langfuse dataset and populate with items."""
+def create_dataset(client, name, description, items, dry_run=False, id_kind=None):
+    """Create a Langfuse dataset and upsert its items (stable ids, see item_id)."""
+    if id_kind:
+        assign_item_ids(name, id_kind, items)
     print(f"\n  Dataset: {name}", file=sys.stderr)
     print(f"  Description: {description}", file=sys.stderr)
     print(f"  Items: {len(items)}", file=sys.stderr)
 
     if dry_run:
         for i, item in enumerate(items[:5]):
-            preview = str(item["input"])[:80]
-            print(f"    [{i+1}] {preview}...", file=sys.stderr)
+            preview = str(item["input"])[:60]
+            print(f"    [{item.get('id', i + 1)}] {preview}...", file=sys.stderr)
         if len(items) > 5:
             print(f"    ... and {len(items) - 5} more", file=sys.stderr)
         return
@@ -195,6 +243,7 @@ def create_dataset(client, name, description, items, dry_run=False):
         try:
             client.create_dataset_item(
                 dataset_name=name,
+                id=item.get("id"),
                 input=item["input"],
                 expected_output=item["expected_output"],
                 metadata=item["metadata"],
@@ -203,7 +252,8 @@ def create_dataset(client, name, description, items, dry_run=False):
         except Exception as e:
             print(f"    Error adding item: {e}", file=sys.stderr)
 
-    print(f"  Added {created}/{len(items)} items", file=sys.stderr)
+    print(f"  Upserted {created}/{len(items)} items (stable ids; re-running "
+          f"updates in place)", file=sys.stderr)
 
 
 # --------------- CLI ---------------
@@ -269,6 +319,7 @@ def main():
                         "Source: PatronusAI/financebench (CC-BY-NC-4.0).",
             items=items,
             dry_run=args.dry_run,
+            id_kind="financebench",
         )
 
     if args.dataset in ("fpb", "all"):
@@ -280,6 +331,7 @@ def main():
                         "(positive/negative/neutral). Source: ChanceFocus/en-fpb.",
             items=items,
             dry_run=args.dry_run,
+            id_kind="fpb",
         )
 
     if args.dataset == "advisory-adversarial":
@@ -293,6 +345,7 @@ def main():
                         "ADVISORY_TEMPT_NONCOMPLIANT=1 to force the FAIL path.",
             items=items,
             dry_run=args.dry_run,
+            id_kind="advisory",
         )
 
     if not args.dry_run and client:

@@ -210,3 +210,26 @@ class TestMonitorV4:
     def test_empty_output_is_skipped(self):
         from monitor_production import evaluate_trace
         assert evaluate_trace({"output": None}) == []
+
+
+class TestDatasetVersion:
+    def test_newest_item_change_is_the_version(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        from cert_common import dataset_version
+        items = [SimpleNamespace(updated_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                                 created_at=None),
+                 SimpleNamespace(updated_at=None,
+                                 created_at=datetime(2026, 9, 2, 3, 4, 5))]
+        assert dataset_version(items) == "2026-09-02T03:04:05.000Z"
+        assert dataset_version([]) is None
+
+    def test_evidence_pack_names_the_version(self):
+        from export_results import format_markdown
+        report = format_markdown({
+            "dataset": "certification/fpb-sample", "run_name": "r",
+            "run_metadata": {"dataset_version": "2026-09-02T03:04:05.000Z",
+                             "dataset_item_count": "10"},
+            "exported_at": "2026-11-04T00:00:00", "total_items": 0,
+            "aggregates": {}, "items": []})
+        assert "| **Dataset version** | 2026-09-02T03:04:05.000Z (10 items) |" in report

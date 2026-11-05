@@ -61,6 +61,8 @@ install: ## Install Python dependencies (uv sync; pip fallback if uv absent or P
 preflight: ## Verify env, credentials, and Langfuse connectivity (go/no-go)
 	$(PY) scripts/preflight.py
 
+# Items have stable ids, so setup_datasets.py upserts; the count guard below is
+# kept for projects seeded before stable ids (random-id items would be copied once).
 seed: preflight ## Load golden datasets (idempotent) + register score configs, queues, prompts
 	@for pair in financebench:certification/financebench-sample \
 	             fpb:certification/fpb-sample \

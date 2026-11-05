@@ -38,8 +38,8 @@ banner "Use-Case Certification Demo  (use_case=$USE_CASE  model=$MODEL)"
 echo "Dataset: $DATASET"
 
 # ── Stage 1: golden data ───────────────────────────────────────────────────
-# setup_datasets.py is ADDITIVE (creates new items on every call), so loading
-# unconditionally would duplicate items on repeated demos. Load only if empty.
+# setup_datasets.py upserts by stable item id, but datasets seeded before stable
+# ids carry random ids and would gain one more copy. Load only if empty.
 banner "1/6  Datasets (golden data)"
 dataset_count() {
   uv run python - "$1" <<'PY'

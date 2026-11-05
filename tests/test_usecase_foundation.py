@@ -237,3 +237,31 @@ class TestImports:
         # Foundation must work before the agent modules land (#9/#10/#11).
         import agents
         assert isinstance(agents.AGENT_REGISTRY, dict)
+
+
+# --------------- Approved-baseline per-case check ---------------
+
+class TestNewlyFailing:
+    GATE = {"groundedness": 0.8, "regulatory_compliance": 1.0}
+
+    def test_case_that_passed_and_now_fails_is_reported(self):
+        from run_usecase_certification import newly_failing
+        baseline = {"a": {"groundedness": 0.9, "regulatory_compliance": 1.0},
+                    "b": {"groundedness": 0.9, "regulatory_compliance": 1.0}}
+        current = {"a": {"groundedness": 0.95, "regulatory_compliance": 0.0},
+                   "b": {"groundedness": 0.9, "regulatory_compliance": 1.0}}
+        assert newly_failing(baseline, current, self.GATE) == [
+            ("a", ["regulatory_compliance"])]
+
+    def test_case_that_already_failed_is_not_a_regression(self):
+        from run_usecase_certification import newly_failing
+        baseline = {"a": {"groundedness": 0.5, "regulatory_compliance": 1.0}}
+        current = {"a": {"groundedness": 0.4, "regulatory_compliance": 1.0}}
+        assert newly_failing(baseline, current, self.GATE) == []
+
+    def test_missing_score_now_counts_as_failing_and_absent_items_are_skipped(self):
+        from run_usecase_certification import newly_failing
+        baseline = {"a": {"groundedness": 0.9, "regulatory_compliance": 1.0},
+                    "gone": {"groundedness": 0.9, "regulatory_compliance": 1.0}}
+        current = {"a": {"regulatory_compliance": 1.0}, "new": {}}
+        assert newly_failing(baseline, current, self.GATE) == [("a", ["groundedness"])]

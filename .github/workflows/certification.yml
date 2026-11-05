@@ -1,3 +1,8 @@
+# DISABLED on purpose: this repo carries no secrets (see cicd/README.md).
+# Recommended shape if you enable live gates in your own fork: Langfuse's
+# `langfuse/experiment-action` with an approved-baseline, per-case regression
+# policy (https://langfuse.com/docs/evaluation/experiments/experiments-ci-cd),
+# or this repo's equivalent: run_usecase_certification.py --ci --baseline <exp>.
 name: LLM Certification
 
 on:

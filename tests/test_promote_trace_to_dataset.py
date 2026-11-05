@@ -98,3 +98,39 @@ class TestTraceFromObservations:
 
     def test_no_rows_is_none(self):
         assert promote.trace_from_observations("t1", []) is None
+
+
+class TestCorrections:
+    """A reviewer's Correction in Langfuse becomes the expected answer (human-authored)."""
+
+    def _trace(self):
+        return {"id": "t1", "input": {"question": "FY19 revenue?"},
+                "output": {"answer": "wrong"}}
+
+    def test_correction_is_used_and_flagged_by_source(self):
+        item = promote.build_dataset_item(self._trace(), correction="$6,489M")
+        assert item["expected_output"] == {"answer": "$6,489M"}
+        assert item["metadata"]["needs_expected_review"] is False
+        assert item["metadata"]["expected_source"] == "correction"
+
+    def test_cli_expected_overrides_correction(self):
+        item = promote.build_dataset_item(self._trace(), expected="$6.5B",
+                                          correction="$6,489M")
+        assert item["expected_output"] == {"answer": "$6.5B"}
+        assert item["metadata"]["expected_source"] == "cli"
+
+    def test_no_correction_still_needs_review(self):
+        item = promote.build_dataset_item(self._trace(), correction=None)
+        assert item["metadata"]["needs_expected_review"] is True
+        assert "expected_source" not in item["metadata"]
+
+    def test_newest_correction_wins_and_others_ignored(self):
+        scores = [
+            {"dataType": "NUMERIC", "name": "groundedness", "value": 0.2},
+            {"dataType": "CORRECTION", "name": "output", "value": "old",
+             "timestamp": "2026-11-01T00:00:00Z"},
+            {"dataType": "CORRECTION", "name": "output", "stringValue": "new",
+             "timestamp": "2026-11-02T00:00:00Z"},
+        ]
+        assert promote.correction_from_scores(scores) == "new"
+        assert promote.correction_from_scores(scores[:1]) is None

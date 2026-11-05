@@ -134,10 +134,13 @@ hard compliance gate: run it with `ADVISORY_TEMPT_NONCOMPLIANT=1` and the agent 
 prohibited phrasing, so the compliance dimension fails the whole run even when every
 other score is perfect.
 
-> **Caveat:** `setup_datasets.py` creates dataset *items* without stable ids, so re-running it
-> against an already-loaded dataset duplicates the items (the dataset itself is created
-> idempotently). `promote_trace_to_dataset.py`, by contrast, upserts items by id and is safe to
-> re-run.
+> **Stable item ids.** `setup_datasets.py` gives every golden item a deterministic id
+> (`financebench-sample-<financebench_id>`, `fpb-sample-<sha256(text)[:12]>`,
+> `advisory-adversarial-<nnn>`), so re-running it upserts in place instead of duplicating.
+> Every item change creates a new **dataset version** in Langfuse; each gate run records the
+> version it used (`dataset_version` in the experiment metadata) and the evidence pack prints it.
+> Datasets seeded before stable ids carry random ids, so re-running against those adds one
+> more copy — `make seed` therefore still skips a dataset that already has items.
 
 ## Running the experiment
 
@@ -612,7 +615,7 @@ What the portal still adds is the gate itself. It shows a **PASS/FAIL matrix per
 | Pass/fail gate matrix against recorded bars | **Portal** | One row per dataset × model/agent, badge = the run's `certification_result` against its recorded thresholds |
 | Gate history by dataset with the bar in force | **Portal** | Each run's recorded `gate_thresholds` / `threshold`, not today's |
 
-**Recommended Langfuse dashboard setup** (UI > Dashboards > New, or via the dashboards API):
+**Recommended Langfuse dashboard setup.** `uv run python setup_dashboards.py` creates all four widgets on one dashboard ("Deployment gate — quality & cost") through Langfuse's unstable dashboards API (`--dry-run` prints the payloads). You can also build them in UI > Dashboards > New:
 1. **Avg scores over time** — line chart, `scores-numeric` view, measure `avg(value)`, dimension `name`, time granularity `day`
 2. **Compliance true-rate** — line chart, `scores-boolean` view, filter `name=regulatory_compliance`, measure `avg(value)`
 3. **Score distribution** — bar chart, `scores-numeric` view, measure `avg(value)`, dimension `name`
@@ -709,11 +712,29 @@ Items are queued when:
 
 Human annotations serve two purposes:
 - **Compliance audit trail** — documented human sign-off on gate results
-- **Evaluator calibration** — compare human scores against automated scores to validate the evaluation rubrics
+- **Evaluator calibration** — compare human scores against automated scores to validate the evaluation rubrics. The groundedness judge also writes a CATEGORICAL `groundedness_label` with the same three categories as `human_groundedness` (≥ 0.8 Fully, ≥ 0.5 Partially, else Not Grounded). In Langfuse → **Scores → Analytics**, compare `human_groundedness` with `groundedness_label` to get the confusion matrix and Cohen's κ for the judge.
+
+Reviewers can also write a **Correction** (the corrected output) on a trace in Langfuse. `promote_trace_to_dataset.py` uses it as the promoted item's expected answer (`metadata.expected_source = "correction"`) unless `--expected` is given, so the flow annotate → correct → promote needs no CLI-typed answer.
 
 ### Production monitoring
 
-Once a model or agent clears the gate and is deployed, `monitor_production.py` continuously monitors live traces for compliance violations and quality degradation.
+**Primary path: Langfuse-managed evaluators.** `setup_evaluators.py` creates the same checks inside Langfuse, running on live traffic with no cron job:
+
+- `regulatory_compliance`: a code evaluator (Python, BOOLEAN)
+- `completeness`: a code evaluator (Python, NUMERIC)
+- `groundedness`: an LLM-as-a-judge evaluator (NUMERIC 0–1)
+
+Two evaluation rules select production root observations (`isRootObservation = true`, `environment = production`): the code evaluators score every match, the judge 20%. The code evaluators' source is **generated from `evaluators.py`** (`compliance_violations`, `completeness_score`, `PROHIBITED_PHRASES`), so the offline gate and live monitoring cannot drift; `tests/test_setup_evaluators.py` runs the generated source against the offline evaluators.
+
+```bash
+uv run python setup_evaluators.py --dry-run   # print every payload
+uv run python setup_evaluators.py             # create evaluators + DISABLED rules
+uv run python setup_evaluators.py --enable    # ...or create the rules enabled
+```
+
+Then add an **Alert** in the Langfuse UI: source = scores, score `regulatory_compliance`, `avg` below 1 over 1 hour, notify Slack, a webhook or GitHub Actions. See [`docs/loop-activation-checklist.md`](docs/loop-activation-checklist.md). The judge needs an LLM connection in the Langfuse project (a human step). On self-hosted Langfuse, Python code evaluators need the `aws-lambda` code-eval dispatcher (`insecure-local` runs TypeScript/JavaScript only).
+
+**Fallback: `monitor_production.py`.** It runs the same deterministic checks from cron, for self-hosted stacks without a code-eval dispatcher or air-gapped setups.
 
 ```
 Options:

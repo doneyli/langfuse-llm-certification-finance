@@ -7,6 +7,30 @@
 
 ---
 
+## Status (applied 2026-11-03 → 2026-11-04)
+
+| Item | Status | Where |
+|---|---|---|
+| A1.1 deprecated reads | **done** | PR 1 (#43): `cert_common` v4 helpers; portal, exporter, monitor, promoter, spike |
+| A1.2 SDK v5 | **done** | PR 1: `langfuse>=5,<6` (lock 5.1.0) |
+| A1.3 run-metadata gap | **done** | PR 1. Spike: v5 metadata comes back *flattened and stringified* (`"gate_thresholds.x": "0.5"`); `normalize_run_metadata` un-flattens it. Legacy runs show status with a `—` bar |
+| A1.4 trace-level judge guidance | **done** | PR 1: evaluator + rule model in README / `ai-engineering-loop.md` |
+| A2.1 duplicate run-score write | **done** | PR 1: `persist_run_evaluations` removed |
+| A2.2 BOOLEAN scores | **done** | PR 2 (#44); demo-project configs migrated with `--migrate-configs` (6 archived → BOOLEAN) |
+| A2.3 prompt links + traced model-gate Claude path | **done** | PR 2 |
+| A2.4 observation types / agent graph | **done** | PR 2: `agent`, `retriever`, `guardrail` |
+| A2.5 self-host v4 | **done** (not booted) | PR 1: compose re-vendored, ClickHouse 26.3 |
+| A2.6 CLI / MCP guidance | **done** | PR 2: `@langfuse/cli` (flags are kebab-case, e.g. `--from-start-time`), MCP server |
+| A2.7 stale README claims | **done** | PR 1 (Experiments nav) + PR 2 (dashboards API, portal-vs-Langfuse, UI promotion) |
+| A2.8 GitHub integration payload | **not applicable** | unchanged, still matches docs |
+| A3.1 managed evaluators + alert | **done, not applied** | PR 3: `setup_evaluators.py` (dry-run verified); creating it in the demo project awaits approval + an LLM connection; alert documented (UI only) |
+| A3.2 Corrections in promotion | **done** | PR 3 |
+| A3.3 stable item ids + dataset version | **done** | PR 3. Ids are `<dataset-short-name>-<key>` (not `fb-<id>`: item ids are project-unique and the same case lives in `-sample` and `-v1`). `make seed` count guard kept for projects seeded before stable ids |
+| A3.4 dashboards as code | **done, not applied** | PR 3: `setup_dashboards.py` (dry-run verified); creation awaits approval |
+| A3.5 CI shape + `--baseline` | **done** | PR 3: docs + opt-in per-case check (verified read-only against two real experiments); CI stays credential-free |
+| A3.6 judge calibration label | **done** | PR 3: `groundedness_label` CATEGORICAL + score config |
+| A4 model refresh | **deferred** | product decision (changes blog/deck figures) |
+
 ## Part A — Audit
 
 ### A0. Baseline the audit was run against
