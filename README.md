@@ -419,9 +419,11 @@ The groundedness evaluator sends the model's output, source evidence, and questi
 
 ### Why both types of evaluators
 
-They cover different failure modes. For example, in our Haiku run:
-- **Numerical accuracy** (deterministic): 60% — Haiku often gets the numbers wrong
-- **Groundedness** (LLM judge): 97% — but when it has evidence, it faithfully uses it
+They cover different failure modes. For example, in an earlier Haiku run of the model gate:
+- **Numerical accuracy** (deterministic): 60% — Haiku often got the numbers wrong
+- **Groundedness** (LLM judge): 97% — but when it had evidence, it faithfully used it
+
+(Current Haiku runs on the 10-item sample score 90–100% numerical accuracy; the example stands for the point it makes, not as today's number.)
 
 Without the LLM judge, you'd just see "60%, FAILED" and assume the model is unreliable. With it, you can see the failure is specifically in numerical reasoning, not in faithfulness to source material. That distinction matters for model risk assessments.
 
