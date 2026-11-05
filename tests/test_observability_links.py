@@ -159,3 +159,37 @@ class TestBooleanScores:
         assert [(a, c["name"]) for a, c, _ in plan] == [
             ("create", "exact_match"), ("skip", "groundedness"),
             ("migrate", "certification_result")]
+
+
+class TestJudgeCalibrationLabel:
+    def test_label_matches_human_groundedness_categories(self):
+        from evaluators import groundedness_label
+        from setup_score_configs import SCORE_CONFIGS
+        human = next(c for c in SCORE_CONFIGS if c["name"] == "human_groundedness")
+        label_cfg = next(c for c in SCORE_CONFIGS if c["name"] == "groundedness_label")
+        assert label_cfg["categories"] == human["categories"]
+        assert groundedness_label(0.95) == "Fully Grounded"
+        assert groundedness_label(0.8) == "Fully Grounded"
+        assert groundedness_label(0.6) == "Partially Grounded"
+        assert groundedness_label(0.1) == "Not Grounded"
+
+    def test_judge_emits_score_and_label(self, monkeypatch):
+        import evaluators as ev
+        resp = SimpleNamespace(content=[SimpleNamespace(
+            text='{"faithfulness": 1.0, "completeness": 0.5, "reasoning": "ok"}')])
+        client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: resp))
+        monkeypatch.setattr(ev, "_get_anthropic_client", lambda: client)
+        out = ev.groundedness_evaluator(input={"question": "q", "evidence": ["e"]},
+                                        output="answer")
+        assert [e.name for e in out] == ["groundedness", "groundedness_label"]
+        assert out[0].value == 0.85 and out[1].value == "Fully Grounded"
+        assert out[1].data_type == "CATEGORICAL"
+
+    def test_judge_failure_emits_no_label(self, monkeypatch):
+        import evaluators as ev
+        resp = SimpleNamespace(content=[SimpleNamespace(text="not json")])
+        client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: resp))
+        monkeypatch.setattr(ev, "_get_anthropic_client", lambda: client)
+        out = ev.groundedness_evaluator(input={"question": "q", "evidence": ["e"]},
+                                        output="answer")
+        assert out.name == "groundedness" and out.value == 0.0

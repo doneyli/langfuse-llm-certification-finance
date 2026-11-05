@@ -18,9 +18,10 @@ that scenario again.
 Design choices (deliberately human-gated):
 - We capture the trace **input** (the scenario) — that is the durable value. We do
   NOT copy the trace output as the expected answer: a flagged trace's output is by
-  definition suspect, and auto-promoting it would poison the golden set. Supply the
-  correct answer with --expected, or leave it blank (metadata flags
-  `needs_expected_review`) for a reviewer to fill in the Langfuse UI.
+  definition suspect, and auto-promoting it would poison the golden set. The
+  expected answer comes from a human: --expected on the CLI, or the **Correction**
+  a reviewer wrote on the trace in Langfuse (annotate → corrected output). With
+  neither, the item is flagged `needs_expected_review`.
 - Items are **idempotent**: the dataset-item id is derived from the trace id
   (`prod-<traceId>`), so re-running upserts instead of duplicating. `source_trace_id`
   links the item back to its origin trace for provenance/audit.
@@ -44,25 +45,36 @@ def item_id_for(trace_id: str) -> str:
 
 
 def build_dataset_item(trace: dict, *, expected: str | None = None,
-                       note: str | None = None) -> dict:
+                       note: str | None = None, correction: str | None = None) -> dict:
     """Build a dataset-item payload from a fetched trace.
 
-    expected: the correct answer, if the reviewer supplies one. When omitted the
-    item is created with an empty expected answer and flagged `needs_expected_review`
-    so it is clearly not yet a usable golden case.
+    expected: the correct answer, if the reviewer supplies one on the CLI.
+    correction: the corrected output a reviewer wrote on the trace in Langfuse
+    (a ``CORRECTION`` score). ``expected`` wins over ``correction``. With
+    neither, the item is created with an empty expected answer and flagged
+    `needs_expected_review` so it is clearly not yet a usable golden case.
+    The trace's own (suspect) output is never used.
     """
     trace_id = trace.get("id")
+    if expected is not None:
+        answer, source = expected, "cli"
+    elif correction:
+        answer, source = correction, "correction"
+    else:
+        answer, source = "", None
     metadata = {
         "promoted_from": "production",
         "source_trace_id": trace_id,
-        "needs_expected_review": expected is None,
+        "needs_expected_review": source is None,
     }
+    if source:
+        metadata["expected_source"] = source
     if note:
         metadata["note"] = note
     return {
         "id": item_id_for(trace_id),
         "input": trace.get("input"),
-        "expected_output": {"answer": expected if expected is not None else ""},
+        "expected_output": {"answer": answer},
         "metadata": metadata,
         "source_trace_id": trace_id,
     }
@@ -116,6 +128,31 @@ def trace_from_observations(trace_id: str, rows: list[dict]) -> dict | None:
     }
 
 
+def correction_from_scores(scores: list[dict]) -> str | None:
+    """The newest reviewer Correction among a trace's v3 scores, as text.
+
+    Langfuse stores a Correction as a score with ``dataType: CORRECTION``
+    (name ``output``); its value is the corrected output.
+    """
+    rows = [s for s in scores or [] if s.get("dataType") == "CORRECTION"]
+    if not rows:
+        return None
+    newest = max(rows, key=lambda s: s.get("timestamp") or s.get("createdAt") or "")
+    value = newest.get("stringValue")
+    if value is None:
+        value = newest.get("value")
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
+
+
+def _fetch_correction(trace_id):
+    """GET /v3/scores?traceId=&dataType=CORRECTION -> corrected text or None."""
+    from cert_common import paginate_cursor
+    return correction_from_scores(paginate_cursor("/api/public/v3/scores", {
+        "traceId": trace_id, "dataType": "CORRECTION"}))
+
+
 def _fetch_trace(trace_id, *, lookback_days=None):
     """Fetch a trace's root observation via GET /v2/observations?traceId=.
 
@@ -156,9 +193,9 @@ def main(argv=None) -> int:
     print(f"Promoting {len(trace_ids)} trace(s) -> dataset '{args.dataset}'",
           file=sys.stderr)
     if args.expected is None:
-        print("  (no --expected given: items are flagged needs_expected_review; "
-              "set the correct answer in the Langfuse UI before relying on them)",
-          file=sys.stderr)
+        print("  (no --expected given: a reviewer's Correction on the trace is used "
+              "as the expected answer; traces without one are flagged "
+              "needs_expected_review)", file=sys.stderr)
 
     from langfuse import get_client
     client = get_client()
@@ -170,7 +207,18 @@ def main(argv=None) -> int:
         except Exception as e:
             print(f"  Warning: could not fetch trace {tid[:12]}...: {e}", file=sys.stderr)
             continue
-        item = build_dataset_item(trace, expected=args.expected, note=args.note)
+        correction = None
+        if args.expected is None:
+            try:
+                correction = _fetch_correction(tid)
+            except Exception as e:
+                print(f"  Warning: could not read corrections for {tid[:12]}...: {e}",
+                      file=sys.stderr)
+        item = build_dataset_item(trace, expected=args.expected, note=args.note,
+                                  correction=correction)
+        if correction and args.expected is None:
+            print(f"  {item['id']}: expected answer taken from the reviewer's "
+                  f"Correction in Langfuse", file=sys.stderr)
         if args.dry_run:
             print(f"  [dry-run] {item['id']}: input={str(item['input'])[:60]!r}",
                   file=sys.stderr)

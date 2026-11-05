@@ -153,9 +153,11 @@ score (BOOLEAN: `true` = PASSED).
   adopt the optional dual-profile setup, `bash scripts/use_env.sh {status|cloud|local|both}`
   turns `.env` into a symlink to `.env.local`/`.env.cloud` — switch profiles with
   that script rather than editing the symlink target directly.
-- **Re-running `setup_datasets.py` duplicates items** (items have no stable ids).
-  Seed once; use `--dry-run` to preview. `promote_trace_to_dataset.py` upserts and
-  is safe to re-run.
+- **Dataset items have stable ids** (`<dataset-short-name>-<key>`, e.g.
+  `fpb-sample-<sha12>`), so `setup_datasets.py` upserts and is safe to re-run on
+  a fresh project. Projects seeded **before** stable ids hold random-id items, so
+  re-running there would add one more copy — that is why `make seed` still skips
+  a dataset that already has items. `promote_trace_to_dataset.py` upserts too.
 - **Long local runs can hang** (OTel queue saturation against a slow local
   Langfuse). Stick to the `-sample` datasets locally; the full 150-item FinanceBench
   run is happier on Cloud. See README "Troubleshooting: hangs on long runs".
@@ -176,7 +178,7 @@ score (BOOLEAN: `true` = PASSED).
 | Model gate runner | `run_certification.py` |
 | Agent gate runner + registry | `run_usecase_certification.py`, `agents/` |
 | Evaluators (deterministic + LLM judge) + gate logic | `evaluators.py` |
-| Setup scripts | `setup_datasets.py`, `setup_score_configs.py`, `setup_annotation_queues.py`, `setup_prompts.py` |
+| Setup scripts | `setup_datasets.py`, `setup_score_configs.py`, `setup_annotation_queues.py`, `setup_prompts.py`; optional `setup_evaluators.py` (managed production monitoring) and `setup_dashboards.py` (dashboard as code) — both `--dry-run` first |
 | Feedback loop | `monitor_production.py`, `promote_trace_to_dataset.py`, `scripts/recert_for_prompt.py` |
 | Portal (FastAPI + React) | `portal/` |
 | Self-host stack | `selfhost/` |

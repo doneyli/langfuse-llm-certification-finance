@@ -67,6 +67,7 @@ from evaluators import (
     certification_gate,
 )
 from cert_common import (
+    dataset_version,
     model_gate_threshold,
     queue_failed_items,
 )
@@ -436,6 +437,8 @@ def main():
             "system_prompt_file": args.system_prompt_file or "",
             "endpoint": args.endpoint,
             "dataset": args.dataset,
+            "dataset_version": dataset_version(dataset.items),
+            "dataset_item_count": len(dataset.items),
             "threshold": args.threshold,
             # The one score `threshold` judged (None: this mode ran no gate).
             # Same key the live gate writes, so a reader never has to guess.

@@ -347,6 +347,29 @@ def normalize_run_metadata(meta) -> dict:
     return out
 
 
+# --------------- Dataset version ---------------
+
+def dataset_version(items) -> str | None:
+    """The golden set's state a run used: the newest item change, ISO 8601 UTC.
+
+    Every item change creates a new dataset version in Langfuse, addressed by
+    timestamp (``get_dataset(name, version=<ts>)`` reproduces it). Recording
+    the newest ``updated_at`` in the run's metadata lets the evidence pack name
+    the exact golden-set state the gate was judged on.
+    """
+    from datetime import timezone
+    stamps = []
+    for item in items or []:
+        ts = getattr(item, "updated_at", None) or getattr(item, "created_at", None)
+        if ts is not None:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            stamps.append(ts.astimezone(timezone.utc))
+    if not stamps:
+        return None
+    return max(stamps).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 # --------------- Prompt management ---------------
 
 def get_managed_prompt(name: str, fallback: str):
