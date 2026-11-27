@@ -193,3 +193,11 @@ score (BOOLEAN: `true` = PASSED).
    the runner prints the experiment URL.
 3. `make portal` → <http://localhost:8050> shows the gate matrix with your run as a row.
 4. `make test` → the offline suite passes (no credentials needed; good for a sanity check any time).
+
+<!-- agent-autonomy:begin project v1 -->
+## Agent workflow (this repo)
+- Default branch: `main`. Setup in a fresh worktree: `make install` (env files come from the main checkout).
+- Tests to run before opening a PR: `make test` (offline, no credentials or model calls; the same suite `tests.yml` runs), plus `cd portal/frontend && npm ci && npm run build` if you changed the portal frontend. Leave out `tests/test_certification.py`: it needs a live Langfuse and paid model calls.
+- Shared stack: the self-hosted Langfuse stack (`docker compose -f selfhost/docker-compose.yml`, wrapped by `make up` / `make down`) belongs to the main checkout. From a worktree use only the read-only checks `make preflight` and `docker compose -f selfhost/docker-compose.yml ps`; never `up`, `down` or `restart` it.
+- After a merge: nothing deploys. A push to `main` runs `tests.yml` (offline tests and the portal frontend build); the live gates in `certification.yml` are disabled in this repo, which carries no secrets.
+<!-- agent-autonomy:end project v1 -->
