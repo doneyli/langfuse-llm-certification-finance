@@ -196,7 +196,8 @@ score (BOOLEAN: `true` = PASSED).
 
 <!-- agent-autonomy:begin project v1 -->
 ## Agent workflow (this repo)
-- Default branch: `main`. Setup in a fresh worktree: `make install` (env files come from the main checkout).
+- Default branch: `main`. Setup in a fresh worktree: `make install` (gitignored env files come from the main checkout through `.worktreeinclude`, except source symlinks in Codex).
+- Restore the active env profile if Codex left `.env` missing: find the main checkout in the first `worktree` entry of `git worktree list --porcelain`, then inspect only its link metadata with `readlink /absolute/path/to/main-checkout/.env`. If the target selects `.env.local`, confirm that profile was copied and run `bash scripts/use_env.sh local` from the worktree; for `.env.cloud`, use `bash scripts/use_env.sh cloud`. This recreates a relative `.env` link to the same profile without reading credentials. Preserve an existing worktree `.env`; if the source target is different or its profile is missing, stop and resolve that setup rather than choosing a default environment.
 - Tests to run before opening a PR: `make test` (offline, no credentials or model calls; the same suite `tests.yml` runs), plus `cd portal/frontend && npm ci && npm run build` if you changed the portal frontend. Leave out `tests/test_certification.py`: it needs a live Langfuse and paid model calls.
 - Shared stack: the self-hosted Langfuse stack (`docker compose -f selfhost/docker-compose.yml`, wrapped by `make up` / `make down`) belongs to the main checkout. From a worktree use only the read-only checks `make preflight` and `docker compose -f selfhost/docker-compose.yml ps`; never `up`, `down` or `restart` it.
 - After a merge: nothing deploys. A push to `main` runs `tests.yml` (offline tests and the portal frontend build); the live gates in `certification.yml` are disabled in this repo, which carries no secrets.

@@ -1,4 +1,5 @@
 # Gitignored files copied into new Claude Code and Codex worktrees. Names only, no secrets.
+# Codex skips source symlinks; restore the active .env link as described in AGENTS.md.
 .env
 .env.cloud
 .env.local
